@@ -7,6 +7,7 @@
 import express from 'express'
 import cors from 'cors'
 import { closeDb } from './services/database'
+import schemaRouter from './routes/schema'
 
 const app = express()
 
@@ -45,6 +46,13 @@ app.use(cors({
 // =============================================================================
 // ルート設定
 // =============================================================================
+
+/**
+ * GET /api/schema
+ * DBスキーマ情報取得エンドポイント
+ * services/schema.ts の fetchSchema() を呼び出し、INFORMATION_SCHEMA からテーブル・カラム情報を返す
+ */
+app.use('/api/schema', schemaRouter)
 
 /**
  * GET /api/health
