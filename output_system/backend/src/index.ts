@@ -8,6 +8,7 @@ import express from 'express'
 import cors from 'cors'
 import { closeDb } from './services/database'
 import schemaRouter from './routes/schema'
+import chatRouter from './routes/chat'
 
 const app = express()
 
@@ -53,6 +54,13 @@ app.use(cors({
  * services/schema.ts の fetchSchema() を呼び出し、INFORMATION_SCHEMA からテーブル・カラム情報を返す
  */
 app.use('/api/schema', schemaRouter)
+
+/**
+ * POST /api/chat
+ * チャットメッセージ送信エンドポイント（SSEストリーミング）
+ * 自然言語の質問を受け取り、SQL生成・実行・結果をSSEで返す
+ */
+app.use('/api/chat', chatRouter)
 
 /**
  * GET /api/health

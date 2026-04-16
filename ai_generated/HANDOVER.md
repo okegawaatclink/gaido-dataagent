@@ -30,15 +30,18 @@ output_system/
 │   └── src/
 │       ├── index.ts         # GET /api/health + /api/schema, グレースフルシャットダウン
 │       ├── routes/schema.ts # GET /api/schema ルート
+│       ├── routes/chat.ts   # POST /api/chat SSEストリーミングエンドポイント
 │       └── services/
 │           ├── database.ts  # knexシングルトンファクトリ + executeQuery()
 │           ├── schema.ts    # INFORMATION_SCHEMAスキーマ取得
-│           └── sqlValidator.ts  # SQLバリデーター（SELECT以外を拒否）
+│           ├── sqlValidator.ts  # SQLバリデーター（SELECT以外を拒否）
+│           └── llm.ts       # LLMサービス（Anthropic SDK ストリーミング）
 ├── test/
 │   ├── e2e/app.spec.ts          # 疎通確認テスト（3件）
 │   └── unit/
 │       ├── schema.test.ts       # スキーマサービスユニットテスト（11件）
-│       └── sqlValidator.test.ts # SQLバリデーターユニットテスト（27件）
+│       ├── sqlValidator.test.ts # SQLバリデーターユニットテスト（27件）
+│       └── llm.test.ts          # LLMサービスユニットテスト（76件）
 ```
 
 ## ビルド・起動方法
@@ -78,6 +81,10 @@ npx playwright test test/e2e/app.spec.ts
 - **SQLバリデーターの設計**: 正規表現パーサーではなくキーワードリスト+単語境界(\b)方式を採用。node-sql-parserは複雑すぎるため不採用。単語境界を使うことで `created_at`→`CREATE` の誤検知を防止
 - **コメント除去の必要性**: `/* DROP TABLE users */ SELECT 1` のようなコメントインジェクション攻撃を防ぐため、キーワード検査前にコメント（--//* */）を除去してから検査する
 - **SqlValidationError**: `instanceof` で判別できるカスタムエラークラス。上位ルーターで400/500の振り分けに使用する
+- **LLMレスポンスのJSON抽出**: 正規表現（```json ... ```フェンス）でパース。複数フェンスがある場合は最後を使用。chart_typeが不正な場合は'table'にフォールバック
+- **Anthropic SDK MessageStream型**: `Anthropic.MessageStream` として型参照できない。`ReturnType<typeof client.messages.stream>` で推論させる必要がある
+- **APIErrorコンストラクタ**: `new APIError(status, error, message, headers)` の4引数。`headers` は `new Headers()` オブジェクトが必要（`{}` 不可）
+- **LLMサービスの設計**: `LlmService.generate()` はasync generatorでLlmEventをyieldする設計。呼び出し側がfor-await-ofでイベントを受け取りSSEに変換する疎結合な設計
 
 ## はまりポイント
 
@@ -89,3 +96,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #5: Docker Composeで雛形アプリを起動できる（frontend/backend一括起動、ヘルスチェックAPI、E2Eテスト）
 - PBI #6: ユーザーDB(PostgreSQL/MySQL)へ接続確認できる（knex抽象化、GET /api/schema、INFORMATION_SCHEMAスキーマ取得、ユニットテスト）
 - PBI #7: SELECTのみ実行可能な安全なSQL実行基盤（sqlValidator.ts、database.executeQuery()、二重防御、ユニットテスト27件）
+- PBI #8: Claude APIで自然言語からSQL/グラフ種を生成できる（llm.ts、POST /api/chat SSEストリーミング、ユニットテスト76件）

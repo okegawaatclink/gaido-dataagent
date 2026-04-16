@@ -11,7 +11,8 @@ export default defineConfig({
       provider: 'v8',
       // カバレッジ対象: services/ 配下のサービスファイル
       // Task 1.2.4: schema.ts, Task 2.1.1: sqlValidator.ts を含む
-      include: ['src/services/schema.ts', 'src/services/sqlValidator.ts'],
+      // Task 2.2.1: llm.ts を追加
+      include: ['src/services/schema.ts', 'src/services/sqlValidator.ts', 'src/services/llm.ts'],
       reporter: ['text', 'json', 'html'],
       // 80%以上のカバレッジを要求
       thresholds: {
