@@ -1,0 +1,59 @@
+# =============================================================================
+# DataAgent Docker Compose 設定
+# instance-config.md の設定に準拠
+# コンテナ名: okegawaatclink-gaido-dataagent-output-system
+# ネットワーク: okegawaatclink-gaido-dataagent-network (external)
+# フロントエンドポート: 3001
+# バックエンドポート: 3002
+# =============================================================================
+
+services:
+  web:
+    build:
+      # ビルドコンテキストをルート階層に設定
+      # これにより ssl-certificates/ ディレクトリをDockerfileからCOPYできる
+      # （output_system/ からの相対パスでは ../ssl-certificates/ が使えないため）
+      context: ..
+      dockerfile: output_system/Dockerfile
+
+    # instance-config.md の「コンテナ名（フロントエンド）」に合わせる
+    # AI Agent containerからこの名前でアクセス可能になる
+    container_name: okegawaatclink-gaido-dataagent-output-system
+
+    # ホスト側ポートとコンテナ内ポートのマッピング
+    # 環境変数が未設定の場合はデフォルト値（3001/3002）を使用
+    ports:
+      - "${FRONTEND_PORT:-3001}:3001"
+      - "${BACKEND_PORT:-3002}:3002"
+
+    # .env ファイルから環境変数を読み込む
+    # .env.example をコピーして .env を作成し、実際の値を設定すること
+    env_file:
+      - .env
+
+    environment:
+      # Vite 5.x以降はデフォルトでlocalhost以外のホスト名からのアクセスをブロックする
+      # コンテナ名でのアクセスを許可するために追加設定が必要
+      # constraints.md の「Viteのホスト制限」参照
+      - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=okegawaatclink-gaido-dataagent-output-system
+
+    # ヘルスチェック設定
+    # バックエンドの /api/health エンドポイントで死活監視
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# =============================================================================
+# ネットワーク設定
+# AI Agent containerと同一ネットワークに参加することで
+# コンテナ名でのアクセスが可能になる
+# =============================================================================
+networks:
+  default:
+    # instance-config.md の「Dockerネットワーク名」に合わせる
+    name: okegawaatclink-gaido-dataagent-network
+    # external: true で既存のネットワークを使用（AI Agent containerが管理）
+    external: true
