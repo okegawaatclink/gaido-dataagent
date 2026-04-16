@@ -7,7 +7,7 @@
  * アシスタントメッセージには以下を表示する:
  * - ストリーミングテキスト（StreamingText）
  * - 生成SQL（SQLDisplay）
- * - クエリ実行結果（ResultTable: Epic 3前の暫定）
+ * - クエリ実行結果（DataTable: Epic 3で本格 ChartRenderer に置き換え予定）
  * - エラーメッセージ（ErrorMessage）
  *
  * XSS対策:
@@ -19,6 +19,7 @@ import type { FC } from 'react'
 import type { ChatMessage as ChatMessageType } from '../../types'
 import StreamingText from './StreamingText'
 import SQLDisplay from '../SQL/SQLDisplay'
+import DataTable from '../Chart/DataTable'
 import ErrorMessage from '../common/ErrorMessage'
 
 /**
@@ -83,20 +84,10 @@ const ChatMessage: FC<ChatMessageProps> = ({ message }) => {
           </div>
         )}
 
-        {/* クエリ実行結果（暫定テーブル表示。Epic 3 で DataTable に置き換え） */}
+        {/* クエリ実行結果（DataTable: Task 2.3.3 暫定実装、Epic 3 で ChartRenderer に置き換え） */}
         {!isUser && message.result && (
           <div className="chat-message__result">
-            {/* ResultTable コンポーネントは Task 2.3.3 で実装 */}
-            {message.result.rows.length === 0 ? (
-              <p className="no-result-text">結果がありません</p>
-            ) : (
-              /* Task 2.3.3 の ResultTable プレースホルダー（後でコンポーネント化） */
-              <div className="result-placeholder">
-                <span className="result-count">
-                  {message.result.rows.length} 件の結果
-                </span>
-              </div>
-            )}
+            <DataTable result={message.result} />
           </div>
         )}
 
