@@ -1,0 +1,81 @@
+/* =============================================================================
+ * DataAgent グローバルスタイル
+ * 基本的なスタイルリセットとレイアウトの定義
+ * ============================================================================= */
+
+/* フォント・ボックスモデルのリセット */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ルート要素のスタイル */
+:root {
+  /* カラーパレット */
+  --color-primary: #4f46e5;
+  --color-primary-light: #6366f1;
+  --color-background: #f9fafb;
+  --color-surface: #ffffff;
+  --color-text-primary: #111827;
+  --color-text-secondary: #6b7280;
+  --color-border: #e5e7eb;
+
+  /* フォント設定 */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+
+/* bodyのデフォルトスタイル */
+body {
+  background-color: var(--color-background);
+  min-height: 100vh;
+}
+
+/* アプリケーション全体のコンテナ */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ヘッダースタイル */
+.app-header {
+  background-color: var(--color-primary);
+  color: white;
+  padding: 1.5rem 2rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.app-header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.app-subtitle {
+  font-size: 0.875rem;
+  opacity: 0.85;
+  margin-top: 0.25rem;
+}
+
+/* メインコンテンツ領域 */
+.app-main {
+  flex: 1;
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* プレースホルダー（後続PBIで機能実装後に削除） */
+.placeholder-content {
+  background-color: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: 0.5rem;
+  padding: 3rem;
+  text-align: center;
+  color: var(--color-text-secondary);
+}

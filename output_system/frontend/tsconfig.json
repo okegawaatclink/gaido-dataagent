@@ -1,0 +1,30 @@
+{
+  // フロントエンド用TypeScript設定
+  // 共通設定はtsconfig.base.jsonを継承し、フロントエンド固有の設定を追加
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // ブラウザ環境で使用するAPIの型定義
+    "target": "ES2020",
+    // モジュール形式（ESModuleに合わせる）
+    "module": "ESNext",
+    // モジュール解決方式（Vite/バンドラー向け）
+    "moduleResolution": "bundler",
+    // JSX変換（React 17+の新しいJSX Transform）
+    "jsx": "react-jsx",
+    // ESモジュールのデフォルトインポートを許可
+    "allowImportingTsExtensions": true,
+    // 型のみのインポートを強制（バンドルサイズ最適化）
+    "verbatimModuleSyntax": true,
+    // ブラウザAPI + DOM操作の型定義
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    // ソースマップ（デバッグ用）
+    "sourceMap": true,
+    // 出力なし（Viteがビルドを担当するため）
+    "noEmit": true,
+    // @/パスエイリアス設定
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}
