@@ -228,11 +228,21 @@ export async function executeQuery(
   // DB_TYPE を取得してクエリ実行方式を分岐
   const dbType = process.env.DB_TYPE ?? 'postgresql'
 
-  // knex.raw() でバリデーション通過済み SQL を実行
+  // sanitizedSql（コメント除去・正規化済み SQL）を DB に渡す
+  //
+  // セキュリティ上の根拠 (H1対策):
+  //   removeComments() は /*!50000 ... */ をブロックコメントとして除去するが、
+  //   元の SQL（コメント付き）を knex.raw() に渡すと MySQL エンジンが
+  //   条件付きコメント内のコードを実行してしまう設計上の乖離が生じる。
+  //   validate() が返す sanitizedSql（コメント除去後の SQL）を使用することで
+  //   この乖離を根本的に解消する。
+  const sqlToExecute = validation.sanitizedSql ?? sql
+
+  // knex.raw() でバリデーション・サニタイズ済み SQL を実行
   // クエリ結果の形式は DB_TYPE によって異なる:
   //   - PostgreSQL: { rows: [...], fields: [...] }
   //   - MySQL:      [rows, fields] タプル
-  const rawResult = await knex.raw(sql)
+  const rawResult = await knex.raw(sqlToExecute)
 
   let rawRows: Record<string, unknown>[]
 

@@ -33,6 +33,19 @@ export interface ValidationResult {
    * ok が true のときは undefined。
    */
   reason?: string
+  /**
+   * ok が true のとき、コメント除去・正規化済みの SQL 文字列。
+   * executeQuery() はこの値を DB に渡すことで、MySQL 条件付きコメント
+   * （MySQL条件付きコメント形式など）バイパスを根本的に防止する。
+   *
+   * セキュリティ背景:
+   *   removeComments() はブロックコメントとして条件付きコメントを除去するが、
+   *   MySQL エンジンは条件付きコメント内のコードを実行する。
+   *   コメント除去後の SQL をそのまま DB へ渡すことで設計上の乖離を解消する。
+   *
+   * ok が false のときは undefined。
+   */
+  sanitizedSql?: string
 }
 
 /**
@@ -59,6 +72,18 @@ const FORBIDDEN_KEYWORDS: ReadonlyArray<string> = [
   'LOAD',
   'IMPORT',
   'COPY',
+  /**
+   * INTO を禁止キーワードに追加（H2対策）
+   *
+   * 以下の危険な構文をブロックするために必要:
+   *   - PostgreSQL: SELECT ... INTO table_name  （テーブル作成）
+   *   - MySQL:      SELECT ... INTO OUTFILE '/path'  （ファイル書き込み）
+   *
+   * 単語境界（\b）により以下への誤検知は発生しない:
+   *   - INFORMATION_SCHEMA（INFORMATIONの部分一致）
+   *   - INNER JOIN（単語 INNER の中にはINTOは含まれない）
+   */
+  'INTO',
 ]
 
 /**
@@ -249,5 +274,7 @@ export function validate(sql: string): ValidationResult {
   }
 
   // すべてのチェックを通過: 実行許可
-  return { ok: true }
+  // sanitizedSql にコメント除去・正規化済み SQL を格納する
+  // executeQuery() がこの値を DB へ渡すことで、MySQL 条件付きコメントバイパスを防止する
+  return { ok: true, sanitizedSql: normalized }
 }
