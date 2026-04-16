@@ -1,0 +1,440 @@
+/**
+ * LLMサービス（Claude API連携）
+ *
+ * @anthropic-ai/sdk を使用して Claude API とのストリーミング通信を行うサービス。
+ * 自然言語の質問とDBスキーマ情報を受け取り、SQL文と推奨グラフ種別を生成する。
+ *
+ * 主な責務:
+ *   - Anthropic クライアントの初期化（APIキー検証）
+ *   - システムプロンプトの構築（スキーマ情報の埋め込み）
+ *   - ストリーミングレスポンスから SQL と chart_type を抽出
+ *   - エラーハンドリング（APIキー未設定、APIエラー、タイムアウト）
+ *
+ * 使用する環境変数:
+ *   ANTHROPIC_API_KEY : Anthropic API キー（必須）
+ *   ANTHROPIC_MODEL   : 使用するモデル名（省略時: claude-3-5-sonnet-20241022）
+ *
+ * 参考: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt
+ */
+
+import Anthropic from '@anthropic-ai/sdk'
+import { SchemaInfo } from './schema'
+
+// ---------------------------------------------------------------------------
+// 型定義
+// ---------------------------------------------------------------------------
+
+/**
+ * LLMサービスへの入力パラメータ
+ */
+export interface LlmGenerateInput {
+  /** ユーザーの自然言語質問 */
+  question: string
+  /** DBスキーマ情報（INFORMATION_SCHEMA から取得済み） */
+  schema: SchemaInfo
+}
+
+/**
+ * LLMから抽出された構造化データの型
+ *
+ * api.md の SSE イベント仕様に対応:
+ *   - sql        : event: sql
+ *   - chartType  : event: chart_type
+ */
+export type ChartType = 'bar' | 'line' | 'pie' | 'table'
+
+/**
+ * generate() が yield するイベントの型
+ *
+ * 呼び出し側は type フィールドで各イベントを判別する。
+ */
+export type LlmEvent =
+  | { type: 'message'; chunk: string }      // テキストチャンク（逐次送信）
+  | { type: 'sql'; sql: string }             // 抽出した SQL 文
+  | { type: 'chart_type'; chartType: ChartType } // 推奨グラフ種別
+
+// ---------------------------------------------------------------------------
+// 定数
+// ---------------------------------------------------------------------------
+
+/**
+ * デフォルトモデル名
+ * ANTHROPIC_MODEL 環境変数が未設定の場合に使用する。
+ * モデルの可搬性のため環境変数での上書きを推奨する。
+ */
+const DEFAULT_MODEL = 'claude-3-5-sonnet-20241022'
+
+/**
+ * APIレスポンスの最大トークン数
+ * SQLとグラフ種別を含むJSONフェンスを生成するために十分な値に設定する。
+ */
+const MAX_TOKENS = 4096
+
+/**
+ * APIリクエストのタイムアウト（ミリ秒）
+ * Anthropic SDK のデフォルト（600秒）より短く設定して早期エラー検出を優先する。
+ */
+const REQUEST_TIMEOUT_MS = 60_000
+
+// ---------------------------------------------------------------------------
+// システムプロンプト
+// ---------------------------------------------------------------------------
+
+/**
+ * Claude に渡すシステムプロンプトのテンプレート
+ *
+ * SQL生成のルール:
+ *   - SELECT 文のみ生成（INSERT/UPDATE/DELETE/DROP 等は絶対に生成しない）
+ *   - 指定されたスキーマ情報のテーブル・カラムのみ参照する
+ *   - 可視化に適したクエリを生成する（集計・ランキング等）
+ *
+ * chart_type のルール:
+ *   - bar  : カテゴリ比較（売上ランキング等）
+ *   - line : 時系列変化（日別推移等）
+ *   - pie  : 構成比（シェア等）
+ *   - table: その他の表形式データ
+ *
+ * レスポンス形式:
+ *   LLM は必ず以下の JSON フェンスを含む回答を返す。
+ *   フェンス外のテキストは説明文として扱われ、SSE の message イベントで送信される。
+ *
+ *   ```json
+ *   {
+ *     "sql": "SELECT ...",
+ *     "chart_type": "bar"
+ *   }
+ *   ```
+ */
+const SYSTEM_PROMPT = `You are a helpful data analyst assistant. Your role is to translate natural language questions into SQL queries for data visualization.
+
+RULES:
+1. Generate ONLY SELECT statements. Never generate INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE, or any other DDL/DML statements.
+2. Use ONLY the tables and columns provided in the schema information.
+3. Generate queries optimized for visualization (aggregations, rankings, time series, etc.).
+4. Choose the most appropriate chart type:
+   - "bar"  : Category comparisons (rankings, totals by category)
+   - "line" : Time series data (trends over time)
+   - "pie"  : Proportional data (distribution, share)
+   - "table": Complex data, many columns, or when no specific chart is appropriate
+
+RESPONSE FORMAT:
+First, provide a brief explanation of your approach in the user's language.
+Then, include a JSON code block with EXACTLY this structure:
+
+\`\`\`json
+{
+  "sql": "SELECT ...",
+  "chart_type": "bar"
+}
+\`\`\`
+
+The JSON must always be at the end of your response.`
+
+// ---------------------------------------------------------------------------
+// ユーティリティ関数
+// ---------------------------------------------------------------------------
+
+/**
+ * SchemaInfo をシステムプロンプトに埋め込むテキスト形式に変換する
+ *
+ * LLM が理解しやすいよう、テーブル名とカラム情報を人間が読みやすい形式で出力する。
+ *
+ * @param schema - fetchSchema() から取得したスキーマ情報
+ * @returns プロンプトに埋め込む文字列
+ *
+ * @example
+ * schemaToPromptText({ database: 'mydb', tables: [{ name: 'users', columns: [...] }] })
+ * // => "Database: mydb\n\nTable: users\n  - id (integer, NOT NULL)\n  - name (text, NULL)..."
+ */
+export function schemaToPromptText(schema: SchemaInfo): string {
+  const lines: string[] = [`Database: ${schema.database}`, '']
+
+  for (const table of schema.tables) {
+    lines.push(`Table: ${table.name}`)
+    for (const col of table.columns) {
+      const nullability = col.nullable ? 'NULL' : 'NOT NULL'
+      lines.push(`  - ${col.name} (${col.type}, ${nullability})`)
+    }
+    lines.push('')
+  }
+
+  return lines.join('\n').trimEnd()
+}
+
+/**
+ * LLM のレスポンステキストから JSON フェンス内の構造化データを抽出する
+ *
+ * LLM が生成するテキストは以下のような形式を想定:
+ *   "今月の売上トップ10は...\n\n```json\n{\"sql\": \"...\", \"chart_type\": \"bar\"}\n```"
+ *
+ * 抽出失敗時（JSON フェンスなし、パース失敗）は null を返す。
+ * 正規表現ではなく JSON フェンス（```json ... ```）を検出してパースするため
+ * テキスト内の不完全な JSON への誤反応を防ぐ。
+ *
+ * @param text - LLM が生成した全テキスト
+ * @returns 抽出した構造化データ、または null（抽出失敗時）
+ */
+export function extractStructuredData(text: string): {
+  sql: string
+  chartType: ChartType
+} | null {
+  // JSON フェンス（```json ... ```）を検索
+  // LLM が ``` のみ（言語指定なし）で返すケースにも対応
+  const jsonFenceRegex = /```(?:json)?\s*\n([\s\S]*?)\n```/g
+  let match: RegExpExecArray | null
+
+  // 最後のマッチを優先（複数フェンスがある場合はJSONが末尾に来ることが多い）
+  let lastMatch: string | null = null
+  while ((match = jsonFenceRegex.exec(text)) !== null) {
+    lastMatch = match[1]
+  }
+
+  if (!lastMatch) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(lastMatch)
+
+    // sql フィールドの検証
+    if (typeof parsed.sql !== 'string' || parsed.sql.trim() === '') {
+      return null
+    }
+
+    // chart_type フィールドの検証
+    const validChartTypes: ChartType[] = ['bar', 'line', 'pie', 'table']
+    const rawChartType = parsed.chart_type as string
+    const chartType: ChartType = validChartTypes.includes(rawChartType as ChartType)
+      ? (rawChartType as ChartType)
+      : 'table' // 不正な値はフォールバック
+
+    return {
+      sql: parsed.sql.trim(),
+      chartType,
+    }
+  } catch {
+    // JSON パース失敗は null を返す
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LLM サービスクラス
+// ---------------------------------------------------------------------------
+
+/**
+ * Anthropic Claude API を使用した LLM サービス
+ *
+ * generate() メソッドがストリーミングで LLMEvent を yield する async generator。
+ * 呼び出し側（chat.ts ルート）は for-await-of でイベントを受け取り、
+ * 各イベントを SSE イベントに変換して送信する。
+ *
+ * @example
+ * ```typescript
+ * const service = new LlmService()
+ * for await (const event of service.generate({ question, schema })) {
+ *   if (event.type === 'message') sendSSE('message', event.chunk)
+ *   if (event.type === 'sql') sendSSE('sql', event.sql)
+ *   if (event.type === 'chart_type') sendSSE('chart_type', event.chartType)
+ * }
+ * ```
+ */
+export class LlmService {
+  /** Anthropic クライアントインスタンス */
+  private client: Anthropic
+
+  /**
+   * LlmService コンストラクタ
+   *
+   * ANTHROPIC_API_KEY 環境変数からAPIキーを取得してクライアントを初期化する。
+   * APIキーが未設定の場合は LlmConfigError をスローする。
+   *
+   * @throws LlmConfigError - ANTHROPIC_API_KEY が未設定の場合
+   */
+  constructor() {
+    const apiKey = process.env.ANTHROPIC_API_KEY
+
+    if (!apiKey || apiKey.trim() === '') {
+      throw new LlmConfigError(
+        'ANTHROPIC_API_KEY が設定されていません。環境変数に Anthropic API キーを設定してください。'
+      )
+    }
+
+    this.client = new Anthropic({
+      apiKey,
+      // タイムアウト設定（ミリ秒）
+      timeout: REQUEST_TIMEOUT_MS,
+    })
+  }
+
+  /**
+   * 自然言語の質問を受け取り、SQL と chart_type をストリーミングで生成する
+   *
+   * 処理フロー:
+   *   1. スキーマ情報をプロンプトテキストに変換
+   *   2. Claude API にストリーミングリクエストを送信
+   *   3. テキストチャンクを message イベントとして yield
+   *   4. ストリーム完了後に全テキストから SQL と chart_type を抽出して yield
+   *
+   * @param input - 質問文とスキーマ情報
+   * @yields LlmEvent - message（テキストチャンク）、sql、chart_type の各イベント
+   * @throws LlmApiError - Claude API の呼び出しに失敗した場合
+   * @throws LlmTimeoutError - APIリクエストがタイムアウトした場合
+   * @throws LlmParseError - LLMレスポンスから SQL / chart_type を抽出できなかった場合
+   */
+  async *generate(input: LlmGenerateInput): AsyncGenerator<LlmEvent> {
+    const { question, schema } = input
+
+    // スキーマ情報をプロンプトテキストに変換
+    const schemaText = schemaToPromptText(schema)
+
+    // ユーザーメッセージにスキーマを埋め込む
+    const userMessage = `## Database Schema\n\n${schemaText}\n\n## Question\n\n${question}`
+
+    // 使用するモデル名（環境変数で上書き可能）
+    const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL
+
+    // Claude API にストリーミングリクエストを送信
+    // messages.stream() は MessageStream を返す
+    // 参考: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt
+    // 型は ReturnType で推論（MessageStream は @anthropic-ai/sdk/lib/MessageStream に定義）
+    let stream: ReturnType<typeof this.client.messages.stream>
+
+    try {
+      stream = this.client.messages.stream({
+        model,
+        max_tokens: MAX_TOKENS,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: userMessage,
+          },
+        ],
+      })
+    } catch (err) {
+      // ネットワークエラー等でストリーム開始失敗
+      throw new LlmApiError(
+        `Claude API への接続に失敗しました: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
+    // テキストチャンクを逐次 yield しながら全テキストを蓄積する
+    let fullText = ''
+
+    try {
+      // on('text') イベントを使用してテキストチャンクを受け取る
+      // AsyncGenerator として yield するため、イベントを Promise でラップする
+      for await (const chunk of stream) {
+        if (
+          chunk.type === 'content_block_delta' &&
+          chunk.delta.type === 'text_delta'
+        ) {
+          const textChunk = chunk.delta.text
+          fullText += textChunk
+
+          // テキストチャンクを message イベントとして yield
+          yield { type: 'message', chunk: textChunk }
+        }
+      }
+    } catch (err) {
+      // タイムアウトエラーを判別して適切な例外をスロー
+      if (err instanceof Anthropic.APIError) {
+        if (err.status === 408 || err.message.toLowerCase().includes('timeout')) {
+          throw new LlmTimeoutError(
+            `Claude API へのリクエストがタイムアウトしました（${REQUEST_TIMEOUT_MS / 1000}秒）。`
+          )
+        }
+        throw new LlmApiError(
+          `Claude API エラー (status: ${err.status}): ${err.message}`
+        )
+      }
+      throw new LlmApiError(
+        `Claude API との通信中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
+    // ストリーム完了後: 全テキストから SQL と chart_type を抽出
+    const extracted = extractStructuredData(fullText)
+
+    if (!extracted) {
+      throw new LlmParseError(
+        'LLM のレスポンスから SQL と chart_type を抽出できませんでした。' +
+          'LLM が期待する JSON フォーマットで回答しなかった可能性があります。'
+      )
+    }
+
+    // SQL を yield
+    yield { type: 'sql', sql: extracted.sql }
+
+    // chart_type を yield
+    yield { type: 'chart_type', chartType: extracted.chartType }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// カスタムエラークラス
+// ---------------------------------------------------------------------------
+
+/**
+ * LLM設定エラー（APIキー未設定等）
+ *
+ * 設定に起因するエラー。上位ルーターでは 503 Service Unavailable を返すことを推奨。
+ */
+export class LlmConfigError extends Error {
+  readonly type = 'LlmConfigError' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'LlmConfigError'
+    Object.setPrototypeOf(this, LlmConfigError.prototype)
+  }
+}
+
+/**
+ * Claude API 呼び出しエラー
+ *
+ * ネットワークエラー、認証失敗、レート制限等。
+ * 上位ルーターでは 502 Bad Gateway を返すことを推奨。
+ */
+export class LlmApiError extends Error {
+  readonly type = 'LlmApiError' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'LlmApiError'
+    Object.setPrototypeOf(this, LlmApiError.prototype)
+  }
+}
+
+/**
+ * タイムアウトエラー
+ *
+ * Claude API へのリクエストがタイムアウトした場合。
+ * 上位ルーターでは 504 Gateway Timeout を返すことを推奨。
+ */
+export class LlmTimeoutError extends Error {
+  readonly type = 'LlmTimeoutError' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'LlmTimeoutError'
+    Object.setPrototypeOf(this, LlmTimeoutError.prototype)
+  }
+}
+
+/**
+ * LLMレスポンスパースエラー
+ *
+ * LLM が期待するフォーマットで回答しなかった場合（JSON フェンスなし等）。
+ * 上位ルーターでは 422 Unprocessable Entity を返すことを推奨。
+ */
+export class LlmParseError extends Error {
+  readonly type = 'LlmParseError' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'LlmParseError'
+    Object.setPrototypeOf(this, LlmParseError.prototype)
+  }
+}
