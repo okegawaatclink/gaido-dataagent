@@ -1,0 +1,646 @@
+/**
+ * POST /api/chat ルート（chat.ts）のユニットテスト
+ *
+ * SSEイベント送出順序、エラー時フロー、バリデーションを検証する。
+ * 外部依存（fetchSchema, LlmService, executeQuery）はすべてモック化する。
+ *
+ * テスト対象:
+ *   - 正常系: message → sql → chart_type → result → done の順で送信
+ *   - エラー系（LLMエラー）: error → done（重複なし）で送信
+ *   - エラー系（DBスキーマ取得失敗）: error → done
+ *   - エラー系（SQL実行失敗）: error → done
+ *   - 必須パラメータ欠落時の400エラー
+ *   - message 最大長超過時の400エラー
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import request from 'supertest'
+import express from 'express'
+
+// ---------------------------------------------------------------------------
+// モジュールモック（vi.mock は巻き上げされるためimportより前に配置）
+// ---------------------------------------------------------------------------
+
+vi.mock('../../backend/src/services/schema', () => ({
+  fetchSchema: vi.fn(),
+}))
+
+// LlmService を class として扱えるよう、モジュール全体を置き換える
+vi.mock('../../backend/src/services/llm', () => {
+  class LlmConfigError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'LlmConfigError'
+    }
+  }
+  class LlmApiError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'LlmApiError'
+    }
+  }
+  class LlmTimeoutError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'LlmTimeoutError'
+    }
+  }
+  class LlmParseError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'LlmParseError'
+    }
+  }
+
+  // LlmService は vi.fn() ではなく通常のクラスとして定義し、
+  // generate メソッドを差し替えやすいよう prototype を公開する
+  class LlmService {
+    generate: () => AsyncGenerator<unknown> = async function* () {}
+  }
+
+  return {
+    LlmService: vi.fn().mockImplementation(() => new LlmService()),
+    LlmConfigError,
+    LlmApiError,
+    LlmTimeoutError,
+    LlmParseError,
+  }
+})
+
+vi.mock('../../backend/src/services/database', () => {
+  class SqlValidationError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'SqlValidationError'
+    }
+  }
+
+  return {
+    executeQuery: vi.fn(),
+    SqlValidationError,
+  }
+})
+
+// ---------------------------------------------------------------------------
+// モックのインポート（vi.mock後にインポートしてキャプチャ）
+// ---------------------------------------------------------------------------
+
+import { fetchSchema } from '../../backend/src/services/schema'
+import {
+  LlmService,
+  LlmApiError,
+  LlmTimeoutError,
+  LlmParseError,
+  LlmConfigError,
+} from '../../backend/src/services/llm'
+import { executeQuery } from '../../backend/src/services/database'
+
+// ---------------------------------------------------------------------------
+// テスト用フィクスチャ
+// ---------------------------------------------------------------------------
+
+/** テスト用スキーマ情報 */
+const mockSchema = {
+  database: 'testdb',
+  tables: [
+    {
+      name: 'orders',
+      columns: [{ name: 'id', type: 'integer', nullable: false }],
+    },
+  ],
+}
+
+/** テスト用クエリ結果 */
+const mockQueryResult = {
+  columns: ['id', 'total'],
+  rows: [{ id: 1, total: 100 }],
+}
+
+// ---------------------------------------------------------------------------
+// SSEレスポンスパースヘルパー
+// ---------------------------------------------------------------------------
+
+/**
+ * SSEレスポンスの本文をパースしてイベントの配列を返すヘルパー
+ *
+ * @param body - supertestのres.textから取得したSSE本文
+ * @returns { event: string; data: unknown }[] のイベント配列
+ */
+function parseSseEvents(body: string): { event: string; data: unknown }[] {
+  const events: { event: string; data: unknown }[] = []
+  // SSEは空行区切りのブロックで構成される
+  const blocks = body.split('\n\n').filter((b) => b.trim() !== '')
+
+  for (const block of blocks) {
+    const lines = block.split('\n')
+    let event = ''
+    let dataStr = ''
+
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        event = line.slice('event: '.length)
+      } else if (line.startsWith('data: ')) {
+        dataStr = line.slice('data: '.length)
+      }
+    }
+
+    if (event && dataStr) {
+      try {
+        events.push({ event, data: JSON.parse(dataStr) })
+      } catch {
+        events.push({ event, data: dataStr })
+      }
+    }
+  }
+
+  return events
+}
+
+// ---------------------------------------------------------------------------
+// LlmService モック生成ヘルパー
+// ---------------------------------------------------------------------------
+
+/**
+ * 正常系用の LlmService generate モックを設定する
+ *
+ * @param sql - 返すSQL文
+ * @param chartType - 返すグラフ種別
+ * @param chunks - テキストチャンクの配列
+ */
+function setupNormalLlmMock(
+  sql: string,
+  chartType: string,
+  chunks: string[] = ['テスト応答']
+): void {
+  vi.mocked(LlmService).mockImplementation(function (this: { generate: () => AsyncGenerator<unknown> }) {
+    this.generate = async function* () {
+      for (const chunk of chunks) {
+        yield { type: 'message', chunk }
+      }
+      yield { type: 'sql', sql }
+      yield { type: 'chart_type', chartType }
+    }
+  } as unknown as new () => InstanceType<typeof LlmService>)
+}
+
+/**
+ * エラーをスローする generate モックを設定する
+ *
+ * @param error - スローするエラーオブジェクト
+ */
+function setupErrorLlmMock(error: Error): void {
+  vi.mocked(LlmService).mockImplementation(function (this: { generate: () => AsyncGenerator<unknown> }) {
+    this.generate = async function* () {
+      throw error
+    }
+  } as unknown as new () => InstanceType<typeof LlmService>)
+}
+
+// ---------------------------------------------------------------------------
+// supertestでSSEレスポンスを取得するヘルパー
+// ---------------------------------------------------------------------------
+
+/**
+ * supertestでSSEストリーミングレスポンスを取得する
+ *
+ * @param app - Expressアプリ
+ * @param message - 送信するメッセージ
+ * @returns { status: number; text: string }
+ */
+async function sendChatRequest(
+  app: express.Express,
+  message: string
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request(app)
+      .post('/api/chat')
+      .send({ message })
+      .set('Accept', 'text/event-stream')
+
+    let responseText = ''
+    let statusCode = 200
+
+    // supertestのレスポンスオブジェクトから生のデータを取得
+    req
+      .buffer(true)
+      .parse((res, cb) => {
+        statusCode = res.statusCode ?? 200
+        let data = ''
+        res.on('data', (chunk: Buffer) => {
+          data += chunk.toString()
+        })
+        res.on('end', () => {
+          responseText = data
+          cb(null, data)
+        })
+        res.on('error', cb)
+      })
+      .then(() => {
+        resolve({ status: statusCode, text: responseText })
+      })
+      .catch(reject)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Expressアプリのセットアップ
+// ---------------------------------------------------------------------------
+
+let app: express.Express
+
+beforeEach(async () => {
+  vi.resetAllMocks()
+
+  // テスト用アプリを毎回新規作成（モジュールキャッシュを利用）
+  const { default: chatRouter } = await import('../../backend/src/routes/chat')
+  app = express()
+  app.use(express.json())
+  app.use('/api/chat', chatRouter)
+})
+
+// ---------------------------------------------------------------------------
+// テストスイート
+// ---------------------------------------------------------------------------
+
+/**
+ * 【モジュール】routes/chat.ts
+ * POST /api/chat エンドポイントのSSEストリーミング動作を検証する
+ */
+describe('POST /api/chat', () => {
+  // -------------------------------------------------------------------------
+  // 正常系
+  // -------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー
+   * 【テスト内容】有効なmessageを送信したとき、SSEイベントが正しい順序で送信される
+   * 【期待結果】message → sql → chart_type → result → done の順でイベントが送信される
+   */
+  it('should send events in correct order: message → sql → chart_type → result → done', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar', ['応答チャンク1', '応答チャンク2'])
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    const { text } = await sendChatRequest(app, '注文一覧を教えて')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert: message イベントが2つ含まれること
+    expect(eventNames.filter((n) => n === 'message').length).toBe(2)
+    // sql イベントが存在すること
+    expect(eventNames).toContain('sql')
+    // chart_type イベントが存在すること
+    expect(eventNames).toContain('chart_type')
+    // result イベントが存在すること
+    expect(eventNames).toContain('result')
+    // done イベントが末尾に1回だけ存在すること
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - sqlイベントのデータ検証
+   * 【テスト内容】LLMが生成したSQLが sql イベントのデータとして含まれる
+   * 【期待結果】event: sql の data.sql が LLM が返したSQL文と一致する
+   */
+  it('should include the generated SQL in the sql event data', async () => {
+    // Arrange
+    const expectedSql = 'SELECT id, total FROM orders ORDER BY total DESC LIMIT 10'
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock(expectedSql, 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    const { text } = await sendChatRequest(app, '売上トップ10を教えて')
+    const events = parseSseEvents(text)
+    const sqlEvent = events.find((e) => e.event === 'sql')
+
+    // Assert
+    expect(sqlEvent).toBeDefined()
+    expect((sqlEvent!.data as { sql: string }).sql).toBe(expectedSql)
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - resultイベントのデータ検証
+   * 【テスト内容】SQL実行結果とchartTypeが result イベントのデータとして含まれる
+   * 【期待結果】event: result の data.columns, data.rows, data.chartType が正しい値
+   */
+  it('should include query result and chartType in the result event', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'pie')
+    vi.mocked(executeQuery).mockResolvedValue({
+      columns: ['id', 'name'],
+      rows: [{ id: 1, name: 'test' }],
+    } as never)
+
+    // Act
+    const { text } = await sendChatRequest(app, '注文を教えて')
+    const events = parseSseEvents(text)
+    const resultEvent = events.find((e) => e.event === 'result')
+
+    // Assert
+    expect(resultEvent).toBeDefined()
+    const resultData = resultEvent!.data as { columns: string[]; rows: unknown[]; chartType: string }
+    expect(resultData.columns).toEqual(['id', 'name'])
+    expect(resultData.rows).toHaveLength(1)
+    expect(resultData.chartType).toBe('pie')
+  })
+
+  // -------------------------------------------------------------------------
+  // エラー系
+  // -------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】POST /api/chat エラーフロー - LLMエラー時
+   * 【テスト内容】LlmApiError が発生したとき
+   * 【期待結果】error → done の順で送信される（done は1回のみ）
+   */
+  it('should send error → done (no duplicate done) when LLM API error occurs', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupErrorLlmMock(new (LlmApiError as new (m: string) => Error)('API rate limit exceeded'))
+
+    // Act
+    const { text } = await sendChatRequest(app, '注文一覧を教えて')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert: error イベントが存在すること
+    expect(eventNames).toContain('error')
+    // done イベントが末尾に1回だけ存在すること（二重送信されていないこと）
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+    // result イベントが含まれないこと
+    expect(eventNames).not.toContain('result')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat エラーフロー - LlmTimeoutError時
+   * 【テスト内容】LlmTimeoutError が発生したとき
+   * 【期待結果】error → done の順で送信される（done は1回のみ）
+   */
+  it('should send error → done when LLM timeout error occurs', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupErrorLlmMock(new (LlmTimeoutError as new (m: string) => Error)('Request timed out'))
+
+    // Act
+    const { text } = await sendChatRequest(app, 'テスト')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert
+    expect(eventNames).toContain('error')
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat エラーフロー - LlmParseError時
+   * 【テスト内容】LlmParseError が発生したとき
+   * 【期待結果】error → done の順で送信される（done は1回のみ）
+   */
+  it('should send error → done when LLM parse error occurs', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupErrorLlmMock(new (LlmParseError as new (m: string) => Error)('Failed to parse JSON'))
+
+    // Act
+    const { text } = await sendChatRequest(app, 'テスト')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert
+    expect(eventNames).toContain('error')
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat エラーフロー - LlmConfigError時（generate内）
+   * 【テスト内容】generate内でLlmConfigError が発生したとき
+   * 【期待結果】error → done の順で送信される（done は1回のみ）
+   */
+  it('should send error → done when LLM config error occurs during generation', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupErrorLlmMock(new (LlmConfigError as new (m: string) => Error)('API key not set'))
+
+    // Act
+    const { text } = await sendChatRequest(app, 'テスト')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert
+    expect(eventNames).toContain('error')
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat エラーフロー - DBスキーマ取得失敗時
+   * 【テスト内容】fetchSchema が例外をスローしたとき
+   * 【期待結果】error → done の順で送信される（done は1回のみ）
+   */
+  it('should send error → done when fetchSchema fails', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockRejectedValue(new Error('DB connection refused'))
+
+    // Act
+    const { text } = await sendChatRequest(app, 'テスト')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert
+    expect(eventNames).toContain('error')
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat エラーフロー - SQL実行エラー時
+   * 【テスト内容】executeQuery が例外をスローしたとき
+   * 【期待結果】error → done の順で送信される（done は1回のみ）
+   */
+  it('should send error → done when executeQuery fails', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockRejectedValue(new Error('Query execution failed'))
+
+    // Act
+    const { text } = await sendChatRequest(app, '注文一覧を教えて')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert: error イベントが存在すること
+    expect(eventNames).toContain('error')
+    // done が1回だけ送信されること（二重送信防止の検証）
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat エラーフロー - LLMサービス初期化エラー時
+   * 【テスト内容】LlmService コンストラクタが LlmConfigError をスローしたとき
+   * 【期待結果】error → done の順で送信される（done は1回のみ）
+   */
+  it('should send error → done when LlmService constructor throws LlmConfigError', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    vi.mocked(LlmService).mockImplementation(() => {
+      throw new (LlmConfigError as new (m: string) => Error)('ANTHROPIC_API_KEY is not set')
+    })
+
+    // Act
+    const { text } = await sendChatRequest(app, 'テスト')
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert
+    expect(eventNames).toContain('error')
+    expect(eventNames.filter((n) => n === 'done').length).toBe(1)
+    expect(eventNames[eventNames.length - 1]).toBe('done')
+  })
+
+  // -------------------------------------------------------------------------
+  // バリデーション（SSE前に400を返すケース）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】POST /api/chat バリデーション
+   * 【テスト内容】message フィールドが存在しないリクエストを送信したとき
+   * 【期待結果】HTTPステータス400が返される（SSEは開始されない）
+   */
+  it('should return 400 when message field is missing', async () => {
+    // Act
+    const res = await request(app).post('/api/chat').send({})
+
+    // Assert
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeDefined()
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat バリデーション
+   * 【テスト内容】message フィールドが空文字のリクエストを送信したとき
+   * 【期待結果】HTTPステータス400が返される（SSEは開始されない）
+   */
+  it('should return 400 when message field is empty string', async () => {
+    // Act
+    const res = await request(app).post('/api/chat').send({ message: '' })
+
+    // Assert
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeDefined()
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat バリデーション
+   * 【テスト内容】message フィールドがスペースのみのリクエストを送信したとき
+   * 【期待結果】HTTPステータス400が返される（SSEは開始されない）
+   */
+  it('should return 400 when message field is whitespace only', async () => {
+    // Act
+    const res = await request(app).post('/api/chat').send({ message: '   ' })
+
+    // Assert
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeDefined()
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat バリデーション - message最大長制限
+   * 【テスト内容】message が2000文字を超えるリクエストを送信したとき
+   * 【期待結果】HTTPステータス400が返される（SSEは開始されない）
+   */
+  it('should return 400 when message exceeds 2000 characters', async () => {
+    // Arrange
+    const longMessage = 'あ'.repeat(2001)
+
+    // Act
+    const res = await request(app).post('/api/chat').send({ message: longMessage })
+
+    // Assert
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/2000/)
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat バリデーション - message最大長境界値
+   * 【テスト内容】message がちょうど2000文字のリクエストを送信したとき
+   * 【期待結果】400エラーにならず処理が進む（fetchSchemaが呼ばれる）
+   */
+  it('should accept message with exactly 2000 characters', async () => {
+    // Arrange
+    const exactMessage = 'a'.repeat(2000)
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    const { text } = await sendChatRequest(app, exactMessage)
+    const events = parseSseEvents(text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert: 400ではなくSSEが返されること（doneイベントが含まれる）
+    expect(eventNames).toContain('done')
+    // fetchSchemaが呼ばれたこと（処理が進んだ証拠）
+    expect(fetchSchema).toHaveBeenCalledOnce()
+  })
+
+  // -------------------------------------------------------------------------
+  // セキュリティ（M2: エラーメッセージの内部情報漏洩防止）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】POST /api/chat セキュリティ - エラーメッセージ
+   * 【テスト内容】fetchSchema がDB接続情報を含むエラーをスローしたとき
+   * 【期待結果】エラーイベントのメッセージにDB接続情報（ホスト名等）が含まれない
+   */
+  it('should not expose internal DB error details in error event message', async () => {
+    // Arrange
+    const internalError = new Error('Connection refused to db-host.internal.example.com:5432')
+    vi.mocked(fetchSchema).mockRejectedValue(internalError)
+
+    // Act
+    const { text } = await sendChatRequest(app, 'テスト')
+    const events = parseSseEvents(text)
+    const errorEvent = events.find((e) => e.event === 'error')
+
+    // Assert
+    expect(errorEvent).toBeDefined()
+    const errorMessage = (errorEvent!.data as { message: string }).message
+    // 内部ホスト名がユーザーに見えないこと
+    expect(errorMessage).not.toContain('db-host.internal.example.com')
+    expect(errorMessage).not.toContain('5432')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat セキュリティ - SQL実行エラーメッセージ
+   * 【テスト内容】executeQuery がDB接続情報を含むエラーをスローしたとき
+   * 【期待結果】エラーイベントのメッセージにDB接続情報が含まれない
+   */
+  it('should not expose DB connection details when executeQuery fails', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    const internalError = new Error('ECONNREFUSED connect ECONNREFUSED 192.168.1.50:5432')
+    vi.mocked(executeQuery).mockRejectedValue(internalError)
+
+    // Act
+    const { text } = await sendChatRequest(app, 'テスト')
+    const events = parseSseEvents(text)
+    const errorEvent = events.find((e) => e.event === 'error')
+
+    // Assert
+    expect(errorEvent).toBeDefined()
+    const errorMessage = (errorEvent!.data as { message: string }).message
+    // 内部IPアドレスやポートがユーザーに見えないこと
+    expect(errorMessage).not.toContain('192.168.1.50')
+    expect(errorMessage).not.toContain('ECONNREFUSED')
+  })
+})

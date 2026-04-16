@@ -19,6 +19,7 @@
  * セキュリティ:
  *   - LLMが生成したSQLは sqlValidator（executeQuery内の二重防御）で検証される
  *   - SELECT 以外のSQL（INSERT/DROP等）は event: error で拒否される
+ *   - エラーメッセージはユーザー向けと内部ログを分離し、内部情報（DBホスト等）の漏洩を防ぐ
  */
 
 import { Router, Request, Response } from 'express'
@@ -27,6 +28,9 @@ import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError
 import { executeQuery, SqlValidationError } from '../services/database'
 
 const router = Router()
+
+/** message フィールドの最大文字数 */
+const MESSAGE_MAX_LENGTH = 2000
 
 // ---------------------------------------------------------------------------
 // SSE ヘルパー関数
@@ -64,19 +68,39 @@ function sendSseEvent(res: Response, event: string, data: unknown): void {
  * リクエストボディ:
  *   { message: string, conversationId?: string }
  *
+ *   message: 必須。2000文字以内。
+ *
  * レスポンス:
  *   Content-Type: text/event-stream（SSEストリーム）
  *   各イベントを順次送信し、最後に event: done を送信して終了する
  *
  * エラーハンドリング:
- *   - message 未設定: event: error 送信後 event: done
+ *   - message 未設定: 400エラー（SSE開始前に返す）
+ *   - message が2000文字超: 400エラー（SSE開始前に返す）
  *   - DB接続エラー: event: error 送信後 event: done
  *   - LLM設定エラー（APIキー未設定）: event: error 送信後 event: done
  *   - LLM APIエラー: event: error 送信後 event: done
  *   - SQLバリデーション失敗: event: error 送信後 event: done
  *   - SQL実行エラー: event: error 送信後 event: done
+ *
+ * セキュリティ:
+ *   - 内部エラー詳細（DBホスト名等）はサーバーログにのみ記録し、レスポンスには含めない
  */
 router.post('/', async (req: Request, res: Response): Promise<void> => {
+  // リクエストボディから message を取得
+  const { message } = req.body as { message?: string; conversationId?: string }
+
+  // message のバリデーション（SSEヘッダー送信前に400で返す）
+  if (!message || message.trim() === '') {
+    res.status(400).json({ error: 'message フィールドは必須です。' })
+    return
+  }
+
+  if (message.length > MESSAGE_MAX_LENGTH) {
+    res.status(400).json({ error: `message は ${MESSAGE_MAX_LENGTH} 文字以内で入力してください。` })
+    return
+  }
+
   // SSE レスポンスヘッダーを設定
   // Content-Type: text/event-stream が SSE の必須ヘッダー
   res.setHeader('Content-Type', 'text/event-stream')
@@ -88,15 +112,20 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   // ヘッダーを即時送信（SSE接続の確立）
   res.flushHeaders()
 
-  // リクエストボディから message を取得
-  const { message } = req.body as { message?: string; conversationId?: string }
+  // done イベント送信済みフラグ（二重送信防止）
+  let doneSent = false
 
-  // message のバリデーション
-  if (!message || message.trim() === '') {
-    sendSseEvent(res, 'error', { message: 'message フィールドは必須です。' })
-    sendSseEvent(res, 'done', {})
-    res.end()
-    return
+  /**
+   * done イベントを一度だけ送信してストリームを終了するヘルパー
+   * finally ブロックから呼ばれるため、エラー系の return 後も必ず実行される。
+   * doneSent フラグで二重送信を防止する。
+   */
+  const finishStream = (): void => {
+    if (!doneSent) {
+      doneSent = true
+      sendSseEvent(res, 'done', {})
+      res.end()
+    }
   }
 
   try {
@@ -107,13 +136,9 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     try {
       schema = await fetchSchema()
     } catch (err) {
-      const errorMessage =
-        err instanceof Error
-          ? `DBスキーマの取得に失敗しました: ${err.message}`
-          : 'DBスキーマの取得に失敗しました。'
-      sendSseEvent(res, 'error', { message: errorMessage })
-      sendSseEvent(res, 'done', {})
-      res.end()
+      // 内部エラー詳細はサーバーログに記録し、ユーザーには一般的なメッセージを返す
+      console.error('[chat] fetchSchema error:', err)
+      sendSseEvent(res, 'error', { message: 'DBスキーマの取得に失敗しました。' })
       return
     }
 
@@ -124,14 +149,13 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     try {
       llmService = new LlmService()
     } catch (err) {
-      // APIキー未設定等の設定エラー
-      const errorMessage =
+      // APIキー未設定等の設定エラー（設定起因なのでメッセージを含める）
+      console.error('[chat] LlmService init error:', err)
+      const userMessage =
         err instanceof LlmConfigError
           ? err.message
           : 'LLM サービスの初期化に失敗しました。'
-      sendSseEvent(res, 'error', { message: errorMessage })
-      sendSseEvent(res, 'done', {})
-      res.end()
+      sendSseEvent(res, 'error', { message: userMessage })
       return
     }
 
@@ -168,24 +192,24 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
         }
       }
     } catch (err) {
-      // LLM 関連エラーを判別して適切なメッセージを送信
-      let errorMessage: string
+      // LLM 関連エラーを判別してユーザー向けメッセージを生成
+      // 内部エラー詳細はサーバーログに記録
+      console.error('[chat] LLM generate error:', err)
 
+      let userMessage: string
       if (err instanceof LlmConfigError) {
-        errorMessage = `LLM 設定エラー: ${err.message}`
+        userMessage = 'LLM の設定に問題があります。管理者にお問い合わせください。'
       } else if (err instanceof LlmTimeoutError) {
-        errorMessage = `LLM タイムアウト: ${err.message}`
+        userMessage = 'LLM の応答がタイムアウトしました。しばらく待ってから再試行してください。'
       } else if (err instanceof LlmParseError) {
-        errorMessage = `LLM レスポンス解析エラー: ${err.message}`
+        userMessage = 'LLM のレスポンス解析に失敗しました。再試行してください。'
       } else if (err instanceof LlmApiError) {
-        errorMessage = `LLM API エラー: ${err.message}`
+        userMessage = 'LLM API でエラーが発生しました。しばらく待ってから再試行してください。'
       } else {
-        errorMessage = `LLM 処理中に予期しないエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`
+        userMessage = 'LLM 処理中に予期しないエラーが発生しました。'
       }
 
-      sendSseEvent(res, 'error', { message: errorMessage })
-      sendSseEvent(res, 'done', {})
-      res.end()
+      sendSseEvent(res, 'error', { message: userMessage })
       return
     }
 
@@ -195,8 +219,6 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     if (!extractedSql) {
       // SQL が生成されなかった場合（通常は LlmParseError が先にスローされるはず）
       sendSseEvent(res, 'error', { message: 'LLM から SQL が生成されませんでした。' })
-      sendSseEvent(res, 'done', {})
-      res.end()
       return
     }
 
@@ -213,21 +235,23 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       })
     } catch (err) {
       // SQL バリデーション失敗または実行エラー
-      const errorMessage =
+      // 内部エラー詳細（DBホスト名等）はサーバーログに記録
+      console.error('[chat] executeQuery error:', err)
+
+      const userMessage =
         err instanceof SqlValidationError
           ? `SQL バリデーションエラー: ${err.message}`
-          : `SQL 実行エラー: ${err instanceof Error ? err.message : String(err)}`
+          : 'SQL の実行中にエラーが発生しました。'
 
-      sendSseEvent(res, 'error', { message: errorMessage })
+      sendSseEvent(res, 'error', { message: userMessage })
     }
   } catch (err) {
     // 予期しないエラー（上記の try-catch を抜けてきた場合）
-    const errorMessage = err instanceof Error ? err.message : '予期しないエラーが発生しました。'
-    sendSseEvent(res, 'error', { message: errorMessage })
+    console.error('[chat] unexpected error:', err)
+    sendSseEvent(res, 'error', { message: '予期しないエラーが発生しました。' })
   } finally {
-    // 必ず done イベントを送信してストリームを終了する
-    sendSseEvent(res, 'done', {})
-    res.end()
+    // done イベントは必ずここで一度だけ送信する（二重送信防止）
+    finishStream()
   }
 })
 
