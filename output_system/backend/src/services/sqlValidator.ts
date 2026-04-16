@@ -71,12 +71,25 @@ const FORBIDDEN_KEYWORDS: ReadonlyArray<string> = [
  *   - 行コメント: `-- ...` から行末まで
  *   - ブロックコメント: `/* ... *‌/`（ネスト非対応）
  *
+ * ネストしたブロックコメントのバイパス対策:
+ *   "/* /* DROP *" + "/ *" + "/" のように内側コメントを除去した後に外側の閉じタグが残る場合、
+ *   その残留閉じタグもバイパス手段となるため追加で除去する。
+ *   例: ネストコメント → 最短一致で内側除去 → 外側が残る → ループ除去 → 残留閉じタグ除去
+ *
  * @param sql - 元の SQL 文字列
  * @returns コメントを除去した SQL 文字列
  */
 export function removeComments(sql: string): string {
   // ブロックコメントを除去: /* ... */（改行を含む）
-  let result = sql.replace(/\/\*[\s\S]*?\*\//g, ' ')
+  // ネストしたコメントに対応するため、コメントがなくなるまで繰り返し除去する
+  let result = sql
+  let previous: string
+  do {
+    previous = result
+    result = result.replace(/\/\*[\s\S]*?\*\//g, ' ')
+  } while (result !== previous)
+  // ネストしたコメント除去後に残留する可能性のある */ を除去（バイパス防止）
+  result = result.replace(/\*\//g, ' ')
   // 行コメントを除去: -- から行末まで
   result = result.replace(/--[^\r\n]*/g, ' ')
   return result
@@ -123,13 +136,25 @@ function findForbiddenKeyword(upperSql: string): string | null {
  *
  * 許容するケース:
  *   - SQL末尾の1個のセミコロン（例: `SELECT 1;`）
+ *   - 文字列リテラル内のセミコロン（例: `WHERE message = 'error; warning'`）
+ *
+ * 文字列リテラル除外の設計:
+ *   シングルクォート（'...'）またはダブルクォート（"..."）で囲まれた文字列内の
+ *   セミコロンはリテラル値の一部であり、ステートメント区切りとして解釈しない。
+ *   これにより `WHERE message = 'error; warning'` のような正常クエリを誤拒否しない。
  *
  * @param sql - 正規化済みの SQL 文字列
  * @returns 複数ステートメントが含まれていれば true
  */
 function hasMultipleStatements(sql: string): boolean {
+  // 文字列リテラル（シングルクォート・ダブルクォート）内のセミコロンは
+  // ステートメント区切りではないため、リテラル部分を空文字で置換してからチェックする
+  // ※ エスケープされたクォート（'' または \"）も考慮した最短一致マッチ
+  const withoutStringLiterals = sql
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
   // 末尾のセミコロンを除去してから、残りにセミコロンが含まれるか確認
-  const withoutTrailingSemicolon = sql.replace(/;\s*$/, '')
+  const withoutTrailingSemicolon = withoutStringLiterals.replace(/;\s*$/, '')
   return withoutTrailingSemicolon.includes(';')
 }
 

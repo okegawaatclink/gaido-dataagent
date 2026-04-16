@@ -61,6 +61,24 @@ FROM users`
     expect(result).toContain('SELECT')
     expect(result).toContain('FROM users')
   })
+
+  /**
+   * 【テスト対象】removeComments
+   * 【テスト内容】ネストしたブロックコメントを渡した場合
+   * 【期待結果】内側コメント除去後に残留する外側の閉じタグも除去されること
+   *
+   * バイパス防止:
+   *   最短一致で内側コメントを除去すると外側の閉じタグが残り、
+   *   後続のキーワード検査をバイパスされる恐れがある。
+   *   残留する閉じタグを追加除去することでバイパスを防ぐ。
+   */
+  it('should remove residual block comment close tag from nested block comments', () => {
+    // ネストコメント: 内側除去後に外側の閉じタグが残らないことを確認
+    const sql = '/* /* DROP */ */ SELECT 1'
+    const result = removeComments(sql)
+    expect(result).not.toContain('*/')
+    expect(result).not.toContain('DROP')
+  })
 })
 
 /**
@@ -136,6 +154,23 @@ describe('validate', () => {
    */
   it('should allow SELECT with a single trailing semicolon', () => {
     const result = validate('SELECT * FROM users;')
+    expect(result.ok).toBe(true)
+  })
+
+  /**
+   * 【テスト対象】validate - 許可パターン
+   * 【テスト内容】文字列リテラル内にセミコロンを含む SELECT を渡した場合
+   * 【期待結果】ok: true が返ること（リテラル内セミコロンはステートメント区切りではない）
+   *
+   * 背景: hasMultipleStatements() が単純な includes(';') だと、
+   *   WHERE message = 'error; warning' のような正常クエリを誤拒否してしまう。
+   *   文字列リテラルを除外してからセミコロン検出することで誤拒否を防ぐ。
+   *
+   * 入力例:
+   *   SELECT * FROM logs WHERE message = 'error; warning'
+   */
+  it('should allow SELECT with semicolon inside string literal', () => {
+    const result = validate("SELECT * FROM logs WHERE message = 'error; warning'")
     expect(result.ok).toBe(true)
   })
 
@@ -307,6 +342,28 @@ describe('validate', () => {
   it('should reject dangerous keywords outside comments', () => {
     // コメントの後に改行で DROP が来る場合はコメント外なので拒否
     const result = validate('SELECT 1\n-- comment\nDROP TABLE users')
+    expect(result.ok).toBe(false)
+  })
+
+  /**
+   * 【テスト対象】validate - 拒否パターン
+   * 【テスト内容】ネストしたブロックコメントでキーワードを隠す SQL を渡した場合
+   * 【期待結果】ok: false が返ること（バイパス攻撃の防止）
+   *
+   * 攻撃パターン:
+   *   ネストしたブロックコメントを使うと、最短一致の正規表現は内側コメントのみを
+   *   除去し、外側の閉じタグが残留する。
+   *   残留した閉じタグの後に実際の SQL 文が続く場合、コメント除去が不完全となり
+   *   バイパスが成立する恐れがある。
+   *   removeComments でループ除去 + 残留閉じタグの除去により防止する。
+   *
+   * 入力例:
+   *   "/* /* DROP TABLE users *" + "/ *" + "/ DROP TABLE users"
+   *   → コメント除去後に DROP TABLE users が残れば ok: false になるべき
+   */
+  it('should reject nested block comment bypass attempt', () => {
+    // ネストコメントの外側に実際のDROPが存在するパターン
+    const result = validate('/* /* comment */ */ DROP TABLE users')
     expect(result.ok).toBe(false)
   })
 
