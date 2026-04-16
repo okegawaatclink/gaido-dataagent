@@ -2,8 +2,8 @@
 
 ## 技術スタック
 - フロントエンド: React 18 + TypeScript + Vite 5
-- バックエンド: Node.js 20 + Express 4 + TypeScript
-- テスト: Playwright (E2E)
+- バックエンド: Node.js 20 + Express 4 + TypeScript + knex 3 (pg/mysql2)
+- テスト: Playwright (E2E) + Vitest (ユニット)
 - コンテナ: Docker Compose (ubuntu:24.04ベース)
 - パッケージ管理: npm workspaces
 
@@ -25,9 +25,20 @@ output_system/
 │       ├── main.tsx         # エントリポイント
 │       └── styles/global.css
 ├── backend/
-│   ├── package.json         # Express 4, cors, ts-node-dev
-│   └── src/index.ts         # GET /api/health エンドポイント
-└── test/e2e/app.spec.ts     # 疎通確認テスト（3件）
+│   ├── package.json         # Express 4, cors, ts-node-dev, knex, pg, mysql2
+│   ├── vitest.config.ts     # Vitestユニットテスト設定
+│   └── src/
+│       ├── index.ts         # GET /api/health + /api/schema, グレースフルシャットダウン
+│       ├── routes/schema.ts # GET /api/schema ルート
+│       └── services/
+│           ├── database.ts  # knexシングルトンファクトリ + executeQuery()
+│           ├── schema.ts    # INFORMATION_SCHEMAスキーマ取得
+│           └── sqlValidator.ts  # SQLバリデーター（SELECT以外を拒否）
+├── test/
+│   ├── e2e/app.spec.ts          # 疎通確認テスト（3件）
+│   └── unit/
+│       ├── schema.test.ts       # スキーマサービスユニットテスト（11件）
+│       └── sqlValidator.test.ts # SQLバリデーターユニットテスト（27件）
 ```
 
 ## ビルド・起動方法
@@ -35,6 +46,7 @@ output_system/
 ```bash
 # .envファイルの準備（初回のみ）
 cp output_system/.env.example output_system/.env
+# .envに DB_TYPE, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME を設定
 
 # 起動（output_system/ で実行）
 cd output_system
@@ -44,6 +56,10 @@ docker compose up -d
 # 確認
 docker compose ps
 curl http://localhost:3002/api/health  # または コンテナIP使用
+curl http://localhost:3002/api/schema  # DBスキーマ取得（DB設定済みの場合）
+
+# ユニットテスト（output_system/backend/ で実行）
+cd output_system/backend && npm test
 
 # E2Eテスト（AI Agent container上で実行）
 cd output_system
@@ -56,6 +72,12 @@ npx playwright test test/e2e/app.spec.ts
 - **concurrently**: 単一コンテナで複数プロセス起動のためconcurrentlyを採用。supervisordやforemanは過剰のため不採用
 - **vite preview**: DockerコンテナではViteのdevモードではなくbuildしてpreviewサーブ。devモードはHMRのWebSocket接続が必要でコンテナ環境と相性が悪い場合があるため
 - **CORS設定**: フロント（3001）とバックエンド（3002）のオリジンが異なるため明示的にCORS設定が必要
+- **knex DB_TYPE→クライアント変換**: `postgresql` → `pg`、`mysql` → `mysql2`。knex本体の `client` は `pg` / `mysql2` という文字列で指定する
+- **MySQL raw() の返り値**: `knex.raw()` はPostgreSQLでは `{ rows: [...] }` を返すが、MySQLでは `[rows, fields]` のタプルを返す。DB種別ごとに異なるデストラクチャリングが必要
+- **Vitest設定のincludeパス**: backendの `vitest.config.ts` から `../test/unit/**/*.test.ts` と相対パスで指定する（output_system/test/unit/ を参照）
+- **SQLバリデーターの設計**: 正規表現パーサーではなくキーワードリスト+単語境界(\b)方式を採用。node-sql-parserは複雑すぎるため不採用。単語境界を使うことで `created_at`→`CREATE` の誤検知を防止
+- **コメント除去の必要性**: `/* DROP TABLE users */ SELECT 1` のようなコメントインジェクション攻撃を防ぐため、キーワード検査前にコメント（--//* */）を除去してから検査する
+- **SqlValidationError**: `instanceof` で判別できるカスタムエラークラス。上位ルーターで400/500の振り分けに使用する
 
 ## はまりポイント
 
@@ -65,3 +87,5 @@ npx playwright test test/e2e/app.spec.ts
 ## 実装済み機能
 
 - PBI #5: Docker Composeで雛形アプリを起動できる（frontend/backend一括起動、ヘルスチェックAPI、E2Eテスト）
+- PBI #6: ユーザーDB(PostgreSQL/MySQL)へ接続確認できる（knex抽象化、GET /api/schema、INFORMATION_SCHEMAスキーマ取得、ユニットテスト）
+- PBI #7: SELECTのみ実行可能な安全なSQL実行基盤（sqlValidator.ts、database.executeQuery()、二重防御、ユニットテスト27件）

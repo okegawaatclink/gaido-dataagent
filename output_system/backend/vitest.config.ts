@@ -9,8 +9,9 @@ export default defineConfig({
     environment: 'node',
     coverage: {
       provider: 'v8',
-      // カバレッジ対象: services/schema.ts のみ（Task 1.2.4 の完了条件）
-      include: ['src/services/schema.ts'],
+      // カバレッジ対象: services/ 配下のサービスファイル
+      // Task 1.2.4: schema.ts, Task 2.1.1: sqlValidator.ts を含む
+      include: ['src/services/schema.ts', 'src/services/sqlValidator.ts'],
       reporter: ['text', 'json', 'html'],
       // 80%以上のカバレッジを要求
       thresholds: {
