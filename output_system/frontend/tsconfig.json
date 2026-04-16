@@ -17,6 +17,8 @@
     "verbatimModuleSyntax": true,
     // ブラウザAPI + DOM操作の型定義
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    // Viteの型定義を含める（import.meta.env 等）
+    "types": ["vite/client"],
     // ソースマップ（デバッグ用）
     "sourceMap": true,
     // 出力なし（Viteがビルドを担当するため）

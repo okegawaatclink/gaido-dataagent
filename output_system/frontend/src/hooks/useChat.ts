@@ -32,17 +32,35 @@ import type {
   QueryResult,
 } from '../types'
 import { streamSseEvents } from './useStreaming'
+import { buildApiUrl } from '../services/api'
 
 // ---------------------------------------------------------------------------
 // 定数
 // ---------------------------------------------------------------------------
 
 /** バックエンドの /api/chat エンドポイントURL */
-const CHAT_API_URL = '/api/chat'
+const CHAT_API_URL = buildApiUrl('/api/chat')
 
 // ---------------------------------------------------------------------------
 // ヘルパー関数
 // ---------------------------------------------------------------------------
+
+/**
+ * ユニークIDを生成するヘルパー
+ *
+ * crypto.randomUUID() は HTTPS または localhost 環境でのみ利用可能。
+ * HTTP 経由（開発環境のコンテナ名アクセス等）では使えないため、
+ * Math.random() ベースのフォールバックを使用する。
+ *
+ * @returns ユニークなID文字列
+ */
+function generateId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // HTTP 環境用フォールバック（十分な一意性を確保）
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
 
 /**
  * 新しいユーザーメッセージを生成する
@@ -52,7 +70,7 @@ const CHAT_API_URL = '/api/chat'
  */
 function createUserMessage(content: string): ChatMessage {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     role: 'user',
     content,
     sql: null,
@@ -72,7 +90,7 @@ function createUserMessage(content: string): ChatMessage {
  */
 function createAssistantMessage(): ChatMessage {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     role: 'assistant',
     content: '',
     sql: null,
