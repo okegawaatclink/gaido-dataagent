@@ -1,0 +1,21 @@
+{
+  // 共通TypeScript設定 - frontendとbackendで共有する基底設定
+  "compilerOptions": {
+    // 厳格な型チェックを有効化（型安全性の確保）
+    "strict": true,
+    // ES モジュールとCommonJSの相互運用を許可
+    "esModuleInterop": true,
+    // 大文字小文字を区別したファイル解決
+    "forceConsistentCasingInFileNames": true,
+    // 宣言ファイルのスキップ（ビルド速度向上）
+    "skipLibCheck": true,
+    // 未使用の変数にエラー
+    "noUnusedLocals": true,
+    // 未使用のパラメータにエラー
+    "noUnusedParameters": true,
+    // 暗黙のanyを禁止
+    "noImplicitAny": true,
+    // nullチェックを厳格化
+    "strictNullChecks": true
+  }
+}
