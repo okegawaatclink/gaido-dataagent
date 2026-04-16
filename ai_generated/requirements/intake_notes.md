@@ -1,0 +1,6 @@
+# 開発依頼内容
+
+databricksのgenieのような自然言語でどんな情報が欲しいかを問い合わせると、 SQLを自動生成して、グラフを作成するシステムを作りたい。
+・バックエンドにはclaudeかcopilotかgeminiを配置したい。
+・データ層としてはPostgresかMysqlに接続する
+・（オプションか将来）GraphQLでopenapiへの接続も行いたい
