@@ -6,6 +6,7 @@
  */
 import express from 'express'
 import cors from 'cors'
+import { closeDb } from './services/database'
 
 const app = express()
 
@@ -88,9 +89,33 @@ const PORT = parseInt(process.env.BACKEND_PORT || '3002', 10)
  * 全インターフェースでリッスン
  * '0.0.0.0' を指定することでDockerコンテナ内外からアクセス可能にする
  */
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`DataAgent Backend API server running on http://0.0.0.0:${PORT}`)
   console.log(`Health check: http://localhost:${PORT}/api/health`)
 })
+
+// =============================================================================
+// プロセス終了ハンドリング
+// =============================================================================
+
+/**
+ * SIGTERM / SIGINT シグナル受信時にDB接続をクローズして正常終了する
+ * Docker コンテナ停止時のグレースフルシャットダウンに対応
+ */
+async function gracefulShutdown(signal: string): Promise<void> {
+  console.log(`${signal} received. Shutting down gracefully...`)
+  server.close(async () => {
+    try {
+      await closeDb()
+      console.log('DB connection closed.')
+    } catch (err) {
+      console.error('Error closing DB connection:', err)
+    }
+    process.exit(0)
+  })
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
 
 export default app
