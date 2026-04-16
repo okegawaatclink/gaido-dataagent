@@ -1,0 +1,38 @@
+{
+  "name": "gaido-legal-agent",
+  "description": "法務エージェント。契約書レビュー、OSSライセンスチェック、利用規約/プライバシーポリシー生成を提供。",
+  "provider": {
+    "organization": "gaido"
+  },
+  "version": "0.1.0",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "skills": [
+    {
+      "id": "contract-review",
+      "name": "契約書レビュー",
+      "description": "契約書・NDA等をPlaybookに基づきレビューし、GREEN/YELLOW/RED判定とredline提案を生成",
+      "inputModes": ["text/plain", "application/pdf"],
+      "outputModes": ["application/json", "text/markdown"]
+    },
+    {
+      "id": "oss-license-check",
+      "name": "OSSライセンスチェック",
+      "description": "プロジェクトの依存関係からOSSライセンスの互換性を検証",
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json", "text/markdown"]
+    },
+    {
+      "id": "policy-generation",
+      "name": "利用規約/ポリシー生成",
+      "description": "Webサービス等の利用規約・プライバシーポリシーのドラフトを生成",
+      "inputModes": ["text/plain"],
+      "outputModes": ["text/markdown"]
+    }
+  ],
+  "securitySchemes": [],
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["application/json", "text/markdown"]
+}

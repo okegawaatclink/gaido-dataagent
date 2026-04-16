@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp", "--api-key", "${CONTEXT7_API_KEY}"]
+    },
+    "socraticode": {
+      "command": "npx",
+      "args": ["-y", "socraticode"],
+      "env": {
+        "QDRANT_MODE": "external",
+        "QDRANT_HOST": "${PROJECT_NAME_PREFIX:-gaido}-qdrant",
+        "QDRANT_PORT": "6333",
+        "OLLAMA_MODE": "external",
+        "OLLAMA_URL": "http://${PROJECT_NAME_PREFIX:-gaido}-ollama:11434"
+      }
+    }
+  }
+}

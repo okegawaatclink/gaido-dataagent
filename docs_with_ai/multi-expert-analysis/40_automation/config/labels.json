@@ -1,0 +1,73 @@
+{
+  "labels": [
+    {
+      "name": "Epic",
+      "description": "Epic階層のIssue",
+      "color": "7057ff"
+    },
+    {
+      "name": "PBI",
+      "description": "Product Backlog Item階層のIssue",
+      "color": "0075ca"
+    },
+    {
+      "name": "Task",
+      "description": "Task階層のIssue",
+      "color": "008672"
+    },
+    {
+      "name": "status:ready",
+      "description": "着手可能",
+      "color": "0e8a16"
+    },
+    {
+      "name": "status:in-progress",
+      "description": "作業中",
+      "color": "fbca04"
+    },
+    {
+      "name": "status:blocked",
+      "description": "ブロック中",
+      "color": "d93f0b"
+    },
+    {
+      "name": "status:review",
+      "description": "レビュー待ち",
+      "color": "1d76db"
+    },
+    {
+      "name": "priority:high",
+      "description": "優先度高",
+      "color": "b60205"
+    },
+    {
+      "name": "priority:medium",
+      "description": "優先度中",
+      "color": "fbca04"
+    },
+    {
+      "name": "priority:low",
+      "description": "優先度低",
+      "color": "0e8a16"
+    },
+    {
+      "name": "pattern:new-development",
+      "description": "新規開発パターン",
+      "color": "5319e7"
+    },
+    {
+      "name": "pattern:maintenance",
+      "description": "保守パターン",
+      "color": "006b75"
+    },
+    {
+      "name": "pattern:data-pipeline",
+      "description": "データパイプラインパターン",
+      "color": "1d76db"
+    }
+  ],
+  "_comment": {
+    "usage": "gh label create <name> --description <description> --color <color>",
+    "setup_script": "for label in $(jq -r '.labels[] | @base64' labels.json); do name=$(echo $label | base64 -d | jq -r '.name'); desc=$(echo $label | base64 -d | jq -r '.description'); color=$(echo $label | base64 -d | jq -r '.color'); gh label create \"$name\" --description \"$desc\" --color \"$color\" --force; done"
+  }
+}
