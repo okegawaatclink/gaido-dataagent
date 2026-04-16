@@ -1,0 +1,26 @@
+{
+  // バックエンド用TypeScript設定
+  // 共通設定はtsconfig.base.jsonを継承し、バックエンド固有の設定を追加
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Node.js 20対応のECMAScriptターゲット
+    "target": "ES2020",
+    // CommonJSモジュール形式（Node.js標準）
+    "module": "CommonJS",
+    // Node.js用モジュール解決
+    "moduleResolution": "node",
+    // Node.js APIの型定義
+    "lib": ["ES2020"],
+    // ソースマップ（デバッグ用）
+    "sourceMap": true,
+    // コンパイル出力先
+    "outDir": "./dist",
+    // ルートディレクトリ（src/以外のファイルを含めないため）
+    "rootDir": "./src",
+    // デコレータ（将来の拡張性のため有効化）
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}
