@@ -11,6 +11,7 @@ import { closeDb } from './services/database'
 import { initHistoryDb, closeHistoryDb } from './services/historyDb'
 import schemaRouter from './routes/schema'
 import chatRouter from './routes/chat'
+import historyRouter from './routes/history'
 
 const app = express()
 
@@ -74,6 +75,13 @@ app.use('/api/schema', schemaRouter)
  * 自然言語の質問を受け取り、SQL生成・実行・結果をSSEで返す
  */
 app.use('/api/chat', chatRouter)
+
+/**
+ * GET /api/history        - 会話履歴一覧（updated_at 降順）
+ * GET /api/history/:id    - 会話詳細（messages 配列付き）
+ * DELETE /api/history/:id - 会話削除（CASCADE で messages も削除）
+ */
+app.use('/api/history', historyRouter)
 
 /**
  * GET /api/health
