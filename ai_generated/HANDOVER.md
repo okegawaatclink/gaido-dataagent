@@ -123,7 +123,9 @@ npx playwright test test/e2e/app.spec.ts
 - **Vite 5のホスト制限**: `allowedHosts` に `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` 環境変数経由でコンテナ名を設定しないとAI Agent containerからアクセスできない
 - **crypto.randomUUID は HTTPS/localhost のみ**: HTTP経由でコンテナ名アクセスする場合は `crypto.randomUUID()` が使えない。`Date.now() + Math.random()` のフォールバックを用意すること
 - **Playwright testMatch 設定**: `testDir: './test'` だけだと unit/ 配下のVitestファイルも拾う。`testMatch: '**/e2e/**/*.spec.ts'` で明示的に絞ること
-- **vite preview にプロキシ機能なし**: `vite preview` は静的ファイルサービスのみ。`/api/xxx` の相対パスリクエストは同一オリジン（3001）に送られる。VITE_API_BASE_URL でバックエンドURLを明示する
+- **vite preview にプロキシ機能なし**: `vite preview` は静的ファイルサービスのみ。`/api/xxx` の相対パスリクエストは同一オリジン（3001）に送られる。VITE_API_BASE_URL でバックエンドURLを明示するか、`vite.config.ts` の `preview.proxy` に `/api` を設定する
+- **better-sqlite3のNODE_MODULE_VERSION不一致**: Dockerビルド時、ホスト側でnpm installされた.nodeファイルがコンテナのNode.jsバージョンと合わない。`COPY output_system/ ./` の後に `RUN npm rebuild better-sqlite3` を実行すること
+- **E2EテストでSSEモックは実DBに書き込まない**: PlaywrightでGET /api/chatをモックしても実際のSQLiteには保存されない。GET /api/historyも合わせてモックしないと履歴が空のまま
 
 ## 実装済み機能
 
@@ -135,3 +137,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #10: Rechartsで棒・折れ線・円グラフを確認できる（chartUtils/BarChart/LineChart/PieChart/ChartRenderer、4タブUI、ユニットテスト29件、E2Eテスト6件）
 - PBI #11: テーブル形式で結果を参照・スクロール閲覧できる（DataTable本格実装、縦横スクロール/sticky header/ゼブラストライプ/NULL表示/数値右寄せ/日付フォーマット/コピー機能、ユニットテスト14件・E2Eテスト8件）
 - PBI #12: 会話・メッセージがSQLiteに保存される（better-sqlite3、historyDb.ts、Repository Pattern、GET/DELETE /api/history、conversationイベント追加、125件ユニットテスト）
+- PBI #13: サイドバーから履歴を閲覧・選択・削除できる（useHistory.ts、Sidebar/HistoryItem.tsx実装、App.tsx統合、自動リフレッシュ、検索フィルタ、E2Eテスト7件）

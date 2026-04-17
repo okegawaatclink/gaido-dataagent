@@ -51,6 +51,7 @@ export interface MessageRow {
   chart_type: string | null
   query_result: string | null
   error: string | null
+  analysis: string | null
   created_at: string
 }
 
@@ -66,6 +67,7 @@ export interface CreateMessageParams {
   chartType?: string | null
   queryResult?: unknown | null
   error?: string | null
+  analysis?: string | null
 }
 
 /**
@@ -198,6 +200,13 @@ function runMigrations(db: Database.Database): void {
       created_at      DATETIME NOT NULL
     )
   `)
+
+  // マイグレーション: analysis カラムを追加（既存DBへの後方互換）
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN analysis TEXT`)
+  } catch {
+    // カラムが既に存在する場合は無視（duplicate column name エラー）
+  }
 
   // インデックス: conversation_id での messages 検索を高速化
   db.exec(`
@@ -396,9 +405,9 @@ export function createMessage(
 
   const stmt = db.prepare(`
     INSERT INTO messages (
-      id, conversation_id, role, content, sql, chart_type, query_result, error, created_at
+      id, conversation_id, role, content, sql, chart_type, query_result, error, analysis, created_at
     ) VALUES (
-      @id, @conversation_id, @role, @content, @sql, @chart_type, @query_result, @error, @created_at
+      @id, @conversation_id, @role, @content, @sql, @chart_type, @query_result, @error, @analysis, @created_at
     )
   `)
 
@@ -411,6 +420,7 @@ export function createMessage(
     chart_type: params.chartType ?? null,
     query_result: queryResultStr,
     error: params.error ?? null,
+    analysis: params.analysis ?? null,
     created_at: now,
   })
 

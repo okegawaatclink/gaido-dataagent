@@ -26,7 +26,7 @@ import { Router, Request, Response } from 'express'
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import { v4 as uuidv4, validate as uuidValidate } from 'uuid'
 import { fetchSchema } from '../services/schema'
-import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError } from '../services/llm'
+import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError, ConversationMessage } from '../services/llm'
 import { executeQuery, SqlValidationError } from '../services/database'
 import {
   getHistoryDb,
@@ -34,6 +34,7 @@ import {
   getConversationById,
   updateConversationTimestamp,
   createMessage,
+  listMessagesByConversationId,
 } from '../services/historyDb'
 
 const router = Router()
@@ -273,10 +274,29 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     let extractedChartType: string | null = null
     let fullAssistantText = ''
 
+    // 会話履歴を取得してLLMに渡す（SQLの修正依頼等のコンテキスト維持）
+    let conversationHistory: ConversationMessage[] = []
+    if (activeConversationId) {
+      try {
+        const historyDb = getHistoryDb()
+        const pastMessages = listMessagesByConversationId(historyDb, activeConversationId)
+        // 最後のuserメッセージ（今回の質問）は除外（LLMへの最新質問として別途渡すため）
+        const withoutCurrent = pastMessages.slice(0, -1)
+        conversationHistory = withoutCurrent.map((m) => ({
+          role: m.role,
+          content: m.content,
+          sql: m.sql,
+        }))
+      } catch (err) {
+        console.error('[chat] history load error (non-fatal):', err)
+      }
+    }
+
     try {
       const generator = llmService.generate({
         question: message.trim(),
         schema,
+        conversationHistory,
       })
 
       for await (const event of generator) {
@@ -346,14 +366,36 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
         chartType: extractedChartType,
       })
 
-      // assistant メッセージをDB に保存（sql, chart_type, query_result 含む）
+      // -----------------------------------------------------------------------
+      // Step 5: クエリ結果の分析コメント生成（ストリーミング）
+      // -----------------------------------------------------------------------
+      let analysisText = ''
+      try {
+        const analysisGenerator = llmService.analyzeResults({
+          question: message.trim(),
+          sql: extractedSql,
+          columns: queryResult.columns,
+          rows: queryResult.rows,
+        })
+
+        for await (const chunk of analysisGenerator) {
+          analysisText += chunk
+          sendSseEvent(res, 'analysis', { chunk })
+        }
+      } catch (err) {
+        // 分析コメント生成失敗はログに記録するが、メインフローは止めない
+        console.error('[chat] analyzeResults error:', err)
+      }
+
+      // assistant メッセージをDB に保存（sql, chart_type, query_result, analysis 含む）
       _saveAssistantMessage(
         activeConversationId,
         fullAssistantText,
         extractedSql,
         extractedChartType,
         queryResult,
-        null
+        null,
+        analysisText || null
       )
     } catch (err) {
       // SQL バリデーション失敗または実行エラー
@@ -400,7 +442,8 @@ function _saveAssistantMessage(
   sql: string | null,
   chartType: string | null,
   queryResult: unknown,
-  error: string | null
+  error: string | null,
+  analysis?: string | null
 ): void {
   if (!conversationId) return
 
@@ -415,6 +458,7 @@ function _saveAssistantMessage(
       chartType,
       queryResult,
       error,
+      analysis,
     })
   } catch (err) {
     // 履歴DB 書き込みエラーはログに記録するが、ストリームには影響しない

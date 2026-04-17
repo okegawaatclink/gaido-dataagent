@@ -91,6 +91,22 @@ const ChatMessage: FC<ChatMessageProps> = ({ message }) => {
           </div>
         )}
 
+        {/* AI分析コメント（アシスタントメッセージのみ） */}
+        {!isUser && message.analysis && (
+          <div className="chat-message__analysis">
+            <div className="chat-message__analysis-header">
+              <span className="chat-message__analysis-icon" aria-hidden="true">💡</span>
+              <span>AIの分析</span>
+            </div>
+            <div className="chat-message__analysis-text">
+              <StreamingText
+                text={message.analysis}
+                isStreaming={message.isStreaming}
+              />
+            </div>
+          </div>
+        )}
+
         {/* エラーメッセージ（アシスタントメッセージのみ） */}
         {!isUser && message.error && (
           <div className="chat-message__error">

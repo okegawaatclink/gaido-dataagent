@@ -30,11 +30,13 @@ export interface ColumnInfo {
   name: string
   type: string
   nullable: boolean
+  comment: string | null
 }
 
 /** テーブル情報 */
 export interface TableInfo {
   name: string
+  comment: string | null
   columns: ColumnInfo[]
 }
 
@@ -49,9 +51,11 @@ export interface SchemaInfo {
  */
 interface InformationSchemaColumn {
   table_name: string
+  table_comment: string | null
   column_name: string
   data_type: string
   is_nullable: string
+  column_comment: string | null
 }
 
 /**
@@ -71,9 +75,16 @@ async function fetchSchemaPostgresql(
   const rows = await db.raw<{ rows: InformationSchemaColumn[] }>(`
     SELECT
       c.table_name,
+      obj_description(
+        (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass
+      ) AS table_comment,
       c.column_name,
       c.data_type,
-      c.is_nullable
+      c.is_nullable,
+      col_description(
+        (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass,
+        c.ordinal_position
+      ) AS column_comment
     FROM information_schema.columns c
     INNER JOIN information_schema.tables t
       ON t.table_schema = c.table_schema
@@ -103,9 +114,11 @@ async function fetchSchemaMysql(
   const [rows] = await db.raw<[InformationSchemaColumn[]]>(`
     SELECT
       c.TABLE_NAME   AS table_name,
+      t.TABLE_COMMENT AS table_comment,
       c.COLUMN_NAME  AS column_name,
       c.DATA_TYPE    AS data_type,
-      c.IS_NULLABLE  AS is_nullable
+      c.IS_NULLABLE  AS is_nullable,
+      c.COLUMN_COMMENT AS column_comment
     FROM information_schema.COLUMNS c
     INNER JOIN information_schema.TABLES t
       ON t.TABLE_SCHEMA = c.TABLE_SCHEMA
@@ -131,26 +144,27 @@ export function buildSchemaInfo(
   database: string,
   rows: InformationSchemaColumn[]
 ): SchemaInfo {
-  // テーブル名をキーとしたMapを使い、カラムをグループ化
-  const tableMap = new Map<string, ColumnInfo[]>()
+  // テーブル名をキーとしたMapを使い、カラムとテーブルコメントをグループ化
+  const tableMap = new Map<string, { comment: string | null; columns: ColumnInfo[] }>()
 
   for (const row of rows) {
     const tableName = row.table_name
     if (!tableMap.has(tableName)) {
-      tableMap.set(tableName, [])
+      tableMap.set(tableName, { comment: row.table_comment ?? null, columns: [] })
     }
-    tableMap.get(tableName)!.push({
+    tableMap.get(tableName)!.columns.push({
       name: row.column_name,
       type: row.data_type,
       // is_nullable は 'YES' / 'NO' の文字列
       nullable: row.is_nullable === 'YES',
+      comment: row.column_comment ?? null,
     })
   }
 
   // テーブル名でソートした配列に変換
   const tables: TableInfo[] = Array.from(tableMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, columns]) => ({ name, columns }))
+    .map(([name, info]) => ({ name, comment: info.comment, columns: info.columns }))
 
   return { database, tables }
 }

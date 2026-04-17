@@ -63,6 +63,7 @@ export interface ChatMessage {
   chartType: ChartType | null
   result: QueryResult | null
   error: string | null
+  analysis: string | null
   isStreaming: boolean
   createdAt: Date
 }

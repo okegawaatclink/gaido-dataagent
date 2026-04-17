@@ -80,6 +80,7 @@ function createUserMessage(content: string): ChatMessage {
     chartType: null,
     result: null,
     error: null,
+    analysis: null,
     isStreaming: false,
     createdAt: new Date(),
   }
@@ -100,6 +101,7 @@ function createAssistantMessage(): ChatMessage {
     chartType: null,
     result: null,
     error: null,
+    analysis: null,
     isStreaming: true,
     createdAt: new Date(),
   }
@@ -275,6 +277,18 @@ export function useChat(): UseChatReturn {
                 error: data.message ?? '不明なエラーが発生しました',
                 isStreaming: false,
               }))
+              break
+            }
+
+            case 'analysis': {
+              // AI分析コメントのチャンクを逐次追加
+              const data = sseEvent.data as SseMessageData
+              if (data.chunk) {
+                updateAssistantMessage(assistantMessageId, (prev) => ({
+                  ...prev,
+                  analysis: (prev.analysis ?? '') + data.chunk,
+                }))
+              }
               break
             }
 

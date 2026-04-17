@@ -52,12 +52,17 @@ paths:
                 type: string
                 description: |
                   以下のイベントが順番に送信される:
+                  - event: conversation (会話ID通知)
                   - event: message (テキスト応答のチャンク)
                   - event: sql (生成されたSQL)
                   - event: chart_type (推奨グラフ種類)
                   - event: result (クエリ結果JSON)
+                  - event: analysis (AI分析コメントのチャンク)
                   - event: error (エラー発生時)
                   - event: done (ストリーム終了)
+                  
+                  会話コンテキスト: conversationId指定時、同一会話の過去メッセージ（直近10往復）を
+                  LLMのmessages配列に含めて送信する。これにより直前のSQLに対する修正依頼に対応可能。
         "400":
           description: リクエスト不正
         "500":
@@ -135,6 +140,10 @@ paths:
                         error:
                           type: string
                           nullable: true
+                        analysis:
+                          type: string
+                          nullable: true
+                          description: AI分析コメント
                         createdAt:
                           type: string
                           format: date-time
@@ -178,6 +187,10 @@ paths:
                         name:
                           type: string
                           description: テーブル名
+                        comment:
+                          type: string
+                          nullable: true
+                          description: テーブルコメント（MySQL TABLE_COMMENT / PostgreSQL obj_description）
                         columns:
                           type: array
                           items:
@@ -189,6 +202,10 @@ paths:
                                 type: string
                               nullable:
                                 type: boolean
+                              comment:
+                                type: string
+                                nullable: true
+                                description: カラムコメント（MySQL COLUMN_COMMENT / PostgreSQL col_description）
         "500":
           description: DB接続エラー
 ```

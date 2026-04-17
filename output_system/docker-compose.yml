@@ -56,13 +56,59 @@ services:
       # コンテナを再起動・再ビルドしても会話履歴が保持される
       - history-data:/app/data
 
+    # webコンテナはMySQLの起動完了を待ってから起動する
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # ===========================================================================
+  # MySQL サーバー
+  # DataAgentが接続するユーザーDB（分析対象データ用）
+  # ===========================================================================
+  mysql:
+    image: mysql:8.0
+    container_name: okegawaatclink-gaido-dataagent-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-sampledb}
+      MYSQL_USER: ${DB_USER:-readonly_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-readonlypass}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ===========================================================================
+  # phpMyAdmin
+  # ブラウザからMySQLを管理するためのGUIツール
+  # ===========================================================================
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: okegawaatclink-gaido-dataagent-phpmyadmin
+    environment:
+      PMA_HOST: okegawaatclink-gaido-dataagent-mysql
+      PMA_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+    ports:
+      - "${PHPMYADMIN_PORT:-8080}:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
 # =============================================================================
 # ボリューム定義
 # =============================================================================
 volumes:
   # SQLite 履歴DB用の named volume
-  # Docker Engine が管理するため、ホスト側パスに依存しない
   history-data:
+  # MySQL データ永続化用の named volume
+  mysql-data:
 
 # =============================================================================
 # ネットワーク設定

@@ -22,6 +22,7 @@ erDiagram
         string chart_type "グラフ種類（bar/line/pie/table）"
         text query_result "クエリ結果JSON"
         text error "エラー内容（エラー時）"
+        text analysis "AI分析コメント（クエリ結果の傾向・特徴）"
         datetime created_at "作成日時"
     }
 
@@ -51,4 +52,5 @@ erDiagram
 | chart_type | TEXT | NULL | グラフ種類 |
 | query_result | TEXT | NULL | クエリ結果JSON |
 | error | TEXT | NULL | エラー内容 |
+| analysis | TEXT | NULL | AI分析コメント |
 | created_at | DATETIME | NOT NULL | 作成日時 |

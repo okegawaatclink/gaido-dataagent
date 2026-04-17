@@ -537,6 +537,35 @@ body {
   color: var(--color-text-primary);
 }
 
+/* AI分析コメントエリア */
+.chat-message__analysis {
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: #f0f9ff;
+  border-left: 3px solid #3b82f6;
+  border-radius: 0 var(--border-radius) var(--border-radius) 0;
+}
+
+.chat-message__analysis-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #2563eb;
+  margin-bottom: var(--spacing-xs);
+}
+
+.chat-message__analysis-icon {
+  font-size: 1rem;
+}
+
+.chat-message__analysis-text {
+  font-size: 0.9rem;
+  color: var(--color-text);
+  line-height: 1.6;
+}
+
 /* エラーエリア */
 .chat-message__error {
   margin-top: var(--spacing-xs);
@@ -881,13 +910,10 @@ body {
 
 /* テーブル本体 */
 .data-table {
-  width: 100%;
   border-collapse: collapse;
   font-size: 0.8125rem;
   /* table-layout: auto でコンテンツに応じた列幅 */
   table-layout: auto;
-  /* テーブル自体は最小幅を確保（横スクロール発生条件） */
-  min-width: 100%;
 }
 
 /* ヘッダー（sticky で縦スクロール時も固定表示） */
@@ -909,7 +935,7 @@ body {
   /* 列名が長くても折り返さない */
   white-space: nowrap;
   /* 最大幅を設定して極端に広くならないようにする */
-  max-width: 250px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   /* ヘッダーの境界線を右側に表示 */
@@ -965,7 +991,7 @@ body {
   color: var(--color-text-primary);
   /* セルの内容が長い場合は省略表示 */
   white-space: nowrap;
-  max-width: 300px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: middle;

@@ -12,7 +12,7 @@
  *
  * 使用する環境変数:
  *   ANTHROPIC_API_KEY : Anthropic API キー（必須）
- *   ANTHROPIC_MODEL   : 使用するモデル名（省略時: claude-3-5-sonnet-20241022）
+ *   ANTHROPIC_MODEL   : 使用するモデル名（省略時: claude-sonnet-4-20250514）
  *
  * 参考: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt
  */
@@ -25,6 +25,16 @@ import { SchemaInfo } from './schema'
 // ---------------------------------------------------------------------------
 
 /**
+ * 会話履歴の1メッセージ（LLMのmessages配列に変換するための入力型）
+ */
+export interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+  /** アシスタントが生成したSQL（コンテキスト維持用） */
+  sql?: string | null
+}
+
+/**
  * LLMサービスへの入力パラメータ
  */
 export interface LlmGenerateInput {
@@ -32,6 +42,8 @@ export interface LlmGenerateInput {
   question: string
   /** DBスキーマ情報（INFORMATION_SCHEMA から取得済み） */
   schema: SchemaInfo
+  /** 会話履歴（直近のやり取り。省略時は単発の質問として扱う） */
+  conversationHistory?: ConversationMessage[]
 }
 
 /**
@@ -62,7 +74,7 @@ export type LlmEvent =
  * ANTHROPIC_MODEL 環境変数が未設定の場合に使用する。
  * モデルの可搬性のため環境変数での上書きを推奨する。
  */
-const DEFAULT_MODEL = 'claude-3-5-sonnet-20241022'
+const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
 
 /**
  * APIレスポンスの最大トークン数
@@ -150,10 +162,14 @@ export function schemaToPromptText(schema: SchemaInfo): string {
   const lines: string[] = [`Database: ${schema.database}`, '']
 
   for (const table of schema.tables) {
-    lines.push(`Table: ${table.name}`)
+    const tableHeader = table.comment
+      ? `Table: ${table.name} -- ${table.comment}`
+      : `Table: ${table.name}`
+    lines.push(tableHeader)
     for (const col of table.columns) {
       const nullability = col.nullable ? 'NULL' : 'NOT NULL'
-      lines.push(`  - ${col.name} (${col.type}, ${nullability})`)
+      const colComment = col.comment ? ` -- ${col.comment}` : ''
+      lines.push(`  - ${col.name} (${col.type}, ${nullability})${colComment}`)
     }
     lines.push('')
   }
@@ -283,21 +299,40 @@ export class LlmService {
    * @throws LlmParseError - LLMレスポンスから SQL / chart_type を抽出できなかった場合
    */
   async *generate(input: LlmGenerateInput): AsyncGenerator<LlmEvent> {
-    const { question, schema } = input
+    const { question, schema, conversationHistory } = input
 
     // スキーマ情報をプロンプトテキストに変換
     const schemaText = schemaToPromptText(schema)
 
-    // ユーザーメッセージにスキーマを埋め込む
+    // 会話履歴をClaude API のmessages配列に変換
+    // 直近の会話コンテキストをLLMに渡すことで、SQLの修正依頼に対応する
+    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = []
+
+    if (conversationHistory && conversationHistory.length > 0) {
+      // 直近10往復（20メッセージ）に制限してトークンを節約
+      const recentHistory = conversationHistory.slice(-20)
+      for (const msg of recentHistory) {
+        if (msg.role === 'user') {
+          // 履歴のユーザーメッセージはスキーマ情報なしで追加（トークン節約）
+          messages.push({ role: 'user', content: msg.content })
+        } else {
+          // アシスタントメッセージにはSQLを含めて文脈を維持
+          const assistantContent = msg.sql
+            ? `${msg.content}\n\n\`\`\`json\n{"sql": ${JSON.stringify(msg.sql)}, "chart_type": "table"}\n\`\`\``
+            : msg.content
+          messages.push({ role: 'assistant', content: assistantContent })
+        }
+      }
+    }
+
+    // 最新のユーザーメッセージにスキーマを埋め込む
     const userMessage = `## Database Schema\n\n${schemaText}\n\n## Question\n\n${question}`
+    messages.push({ role: 'user', content: userMessage })
 
     // 使用するモデル名（環境変数で上書き可能）
     const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL
 
     // Claude API にストリーミングリクエストを送信
-    // messages.stream() は MessageStream を返す
-    // 参考: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt
-    // 型は ReturnType で推論（MessageStream は @anthropic-ai/sdk/lib/MessageStream に定義）
     let stream: ReturnType<typeof this.client.messages.stream>
 
     try {
@@ -305,12 +340,7 @@ export class LlmService {
         model,
         max_tokens: MAX_TOKENS,
         system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: userMessage,
-          },
-        ],
+        messages,
       })
     } catch (err) {
       // ネットワークエラー等でストリーム開始失敗
@@ -369,6 +399,87 @@ export class LlmService {
 
     // chart_type を yield
     yield { type: 'chart_type', chartType: extracted.chartType }
+  }
+
+  /**
+   * クエリ結果をLLMに渡し、分析コメントをストリーミング生成する
+   *
+   * SQL実行結果に対してデータの傾向・特徴・注目ポイントを解説する。
+   * 呼び出し側は for-await-of で テキストチャンクを受け取る。
+   *
+   * @param input - 元の質問、実行SQL、クエリ結果
+   * @yields string - テキストチャンク（逐次送信用）
+   */
+  async *analyzeResults(input: {
+    question: string
+    sql: string
+    columns: string[]
+    rows: Record<string, unknown>[]
+  }): AsyncGenerator<string> {
+    const { question, sql, columns, rows } = input
+
+    // 結果データをテキスト化（最大50行に制限してトークン節約）
+    const displayRows = rows.slice(0, 50)
+    const resultText = displayRows.map((row) =>
+      columns.map((col) => `${col}: ${row[col] ?? 'NULL'}`).join(', ')
+    ).join('\n')
+    const truncatedNote = rows.length > 50 ? `\n（全${rows.length}件中、先頭50件を表示）` : ''
+
+    const userMessage = `以下のデータについて、簡潔に分析コメントしてください。
+
+## ユーザーの質問
+${question}
+
+## 実行したSQL
+${sql}
+
+## クエリ結果（${rows.length}件）
+カラム: ${columns.join(', ')}
+${resultText}${truncatedNote}`
+
+    const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL
+
+    const analysisSystemPrompt = `あなたはデータアナリストです。クエリ結果を見て、以下の観点から簡潔にコメントしてください:
+- データの傾向や特徴
+- 注目すべきポイント（最大値・最小値・異常値など）
+- ビジネス上の示唆（あれば）
+
+3〜5文程度で簡潔にまとめてください。日本語で回答してください。`
+
+    let stream: ReturnType<typeof this.client.messages.stream>
+
+    try {
+      stream = this.client.messages.stream({
+        model,
+        max_tokens: 1024,
+        system: analysisSystemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+      })
+    } catch (err) {
+      throw new LlmApiError(
+        `Claude API への接続に失敗しました: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+
+    try {
+      for await (const chunk of stream) {
+        if (
+          chunk.type === 'content_block_delta' &&
+          chunk.delta.type === 'text_delta'
+        ) {
+          yield chunk.delta.text
+        }
+      }
+    } catch (err) {
+      if (err instanceof Anthropic.APIError) {
+        throw new LlmApiError(
+          `Claude API エラー (status: ${err.status}): ${err.message}`
+        )
+      }
+      throw new LlmApiError(
+        `Claude API との通信中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
   }
 }
 

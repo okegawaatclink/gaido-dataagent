@@ -48,6 +48,7 @@ export interface HistoryMessageResponse {
     chartType: ChartType | null
   } | null
   error: string | null
+  analysis?: string | null
   createdAt: string
 }
 
@@ -115,6 +116,7 @@ function toFrontendMessage(msg: HistoryMessageResponse): ChatMessage {
     chartType: (msg.chartType as ChartType | null) ?? null,
     result,
     error: msg.error,
+    analysis: msg.analysis ?? null,
     isStreaming: false,  // 履歴はストリーミング中ではない
     createdAt: new Date(msg.createdAt),
   }
