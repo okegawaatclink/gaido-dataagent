@@ -706,8 +706,14 @@ body {
 }
 
 /* =============================================================================
- * DataTable（クエリ結果テーブル: Task 2.3.3 暫定実装）
- * Epic 3 の本格 ChartRenderer に置き換えられる前の簡易テーブル
+ * DataTable（クエリ結果テーブル: PBI 3.2 本実装）
+ * - 縦・横スクロール対応（最大高さ500px）
+ * - sticky header（スクロール中もヘッダーが見える）
+ * - ゼブラストライプ（奇数行の背景色を変える）
+ * - 行数サマリー（全N件中、M件を表示）
+ * - NULL値のグレー表示
+ * - 数値列の右寄せ
+ * - セルコピー機能（クリックでコピー）
  * ============================================================================= */
 
 .data-table-wrapper {
@@ -717,34 +723,80 @@ body {
   margin-top: var(--spacing-sm);
 }
 
-/* 件数サマリー */
+/* 件数サマリーバー */
 .data-table-summary {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--spacing-sm);
   font-size: 0.8125rem;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background-color: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
 }
 
+/* 全件数表示（500行以下の場合） */
 .data-table-summary__total {
-  font-weight: 600;
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
 
-.data-table-summary__truncated {
+.data-table-summary__total strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* 500行超の場合の「全N件中M件を表示」テキスト */
+.data-table-summary__truncated-info {
   color: var(--color-text-secondary);
+}
+
+.data-table-summary__truncated-info strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.data-table-summary__truncated-note {
+  margin-left: var(--spacing-xs);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
   font-style: italic;
 }
 
-/* テーブルコンテナ（横スクロール対応） */
+/* コピーヒントテキスト（右寄せ） */
+.data-table-summary__copy-hint {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* テーブルコンテナ（縦・横スクロール対応） */
 .data-table-scroll {
+  /* 横スクロール: コンテナ幅を超えた場合にスクロールバーを表示 */
   overflow-x: auto;
+  /* 縦スクロール: 最大高さ500pxを超えた場合にスクロールバーを表示 */
+  max-height: 500px;
+  overflow-y: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  /* 縦方向は最大300pxまで（高さを制限してチャットエリアを圧迫しない） */
-  max-height: 300px;
-  overflow-y: auto;
+  /* スクロールバーのスタイル（Firefox用） */
   scrollbar-width: thin;
   scrollbar-color: var(--color-border) transparent;
+}
+
+/* Webkit系ブラウザのスクロールバースタイル */
+.data-table-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.data-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.data-table-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 3px;
 }
 
 /* テーブル本体 */
@@ -752,14 +804,18 @@ body {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.8125rem;
+  /* table-layout: auto でコンテンツに応じた列幅 */
   table-layout: auto;
+  /* テーブル自体は最小幅を確保（横スクロール発生条件） */
+  min-width: 100%;
 }
 
-/* ヘッダー */
+/* ヘッダー（sticky で縦スクロール時も固定表示） */
 .data-table__head {
-  position: sticky; /* ヘッダーを固定して行数が多くてもカラム名が見える */
+  position: sticky;
   top: 0;
-  z-index: 1;
+  /* スクロール時に行データの上に表示されるようにz-indexを設定 */
+  z-index: 2;
   background-color: var(--color-surface-alt);
 }
 
@@ -770,50 +826,120 @@ body {
   font-size: 0.8125rem;
   color: var(--color-text-secondary);
   border-bottom: 2px solid var(--color-border);
+  /* 列名が長くても折り返さない */
   white-space: nowrap;
-  max-width: 200px;
+  /* 最大幅を設定して極端に広くならないようにする */
+  max-width: 250px;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* ヘッダーの境界線を右側に表示 */
+  border-right: 1px solid var(--color-border);
 }
 
-/* 行番号列 */
+.data-table__th:last-child {
+  border-right: none;
+}
+
+/* 数値列のヘッダーは右寄せ */
+.data-table__th--numeric {
+  text-align: right;
+}
+
+/* 行番号列（ヘッダー・セル共通） */
 .data-table__th--row-num,
 .data-table__td--row-num {
   color: var(--color-text-muted);
   font-size: 0.75rem;
-  min-width: 2rem;
+  min-width: 2.5rem;
+  width: 2.5rem;
   text-align: right;
   padding-right: var(--spacing-sm);
+  /* 行番号列は固定幅なので縮小しない */
+  white-space: nowrap;
 }
 
-/* データ行 */
+/* データ行（偶数行: ベース色） */
 .data-table__row {
   background-color: var(--color-surface);
+  /* ホバー遷移 */
+  transition: background-color 0.1s ease;
 }
 
-/* 奇数行の縞模様 */
+/* 奇数行（ゼブラストライプ） */
 .data-table__row--odd {
-  background-color: rgba(249, 250, 251, 0.8);
+  /* 微妙に暗い背景色で視覚的に交互パターンを表現 */
+  background-color: #f8f9fb;
 }
 
+/* 行ホバー */
 .data-table__row:hover,
 .data-table__row--odd:hover {
-  background-color: rgba(79, 70, 229, 0.04);
+  background-color: rgba(79, 70, 229, 0.05);
 }
 
 /* データセル */
 .data-table__td {
   padding: var(--spacing-xs) var(--spacing-sm);
   border-bottom: 1px solid var(--color-border);
+  border-right: 1px solid rgba(229, 231, 235, 0.5);
   color: var(--color-text-primary);
+  /* セルの内容が長い場合は省略表示 */
   white-space: nowrap;
   max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: middle;
+  /* コピー可能なことを示すカーソル */
+  cursor: pointer;
+  /* キーボード操作用のフォーカスリング */
+  outline: none;
 }
 
-/* 空の結果 */
+.data-table__td:last-child {
+  border-right: none;
+}
+
+/* セルのフォーカス状態（キーボード操作） */
+.data-table__td:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+/* セルのホバー状態（コピー可能であることのフィードバック） */
+.data-table__td:hover {
+  background-color: rgba(79, 70, 229, 0.08);
+}
+
+/* 数値セル（右寄せ・等幅フォント） */
+.data-table__td--numeric {
+  text-align: right;
+  /* 数値は等幅フォントで揃えて見やすくする */
+  font-variant-numeric: tabular-nums;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+/* NULL値セル（グレーで視覚的に区別） */
+.data-table__td--null {
+  color: var(--color-text-muted);
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
+/* コピー完了状態のセル */
+.data-table__td--copied {
+  background-color: rgba(22, 163, 74, 0.1) !important;
+  color: var(--color-success);
+  font-weight: 500;
+}
+
+/* コピー完了ラベル */
+.data-table__td-copied-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-success);
+}
+
+/* 空の結果（データなし・列なし） */
 .data-table-empty {
   display: flex;
   flex-direction: column;
