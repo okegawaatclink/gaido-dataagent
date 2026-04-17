@@ -8,6 +8,7 @@ import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import { closeDb } from './services/database'
+import { initHistoryDb, closeHistoryDb } from './services/historyDb'
 import schemaRouter from './routes/schema'
 import chatRouter from './routes/chat'
 
@@ -113,6 +114,24 @@ app.get('/', (_req, res) => {
  */
 const PORT = parseInt(process.env.BACKEND_PORT || '3002', 10)
 
+// =============================================================================
+// 会話履歴DB の初期化（起動時）
+// =============================================================================
+
+/**
+ * SQLite 履歴DB の初期化
+ * conversations / messages テーブルが存在しない場合は自動作成する（べき等）。
+ * DBファイルパスは環境変数 HISTORY_DB_PATH で指定可能（デフォルト: /app/data/history.sqlite）
+ */
+try {
+  initHistoryDb()
+  console.log('History DB initialized successfully.')
+} catch (err) {
+  // 履歴DB の初期化失敗はクリティカルエラーではない（チャット機能は継続）
+  // ただし、ログに詳細を記録して問題を可視化する
+  console.error('[startup] History DB initialization failed:', err)
+}
+
 /**
  * 全インターフェースでリッスン
  * '0.0.0.0' を指定することでDockerコンテナ内外からアクセス可能にする
@@ -138,6 +157,13 @@ async function gracefulShutdown(signal: string): Promise<void> {
       console.log('DB connection closed.')
     } catch (err) {
       console.error('Error closing DB connection:', err)
+    }
+    try {
+      // 履歴DB（better-sqlite3）は同期APIのため await 不要
+      closeHistoryDb()
+      console.log('History DB connection closed.')
+    } catch (err) {
+      console.error('Error closing History DB connection:', err)
     }
     process.exit(0)
   })
