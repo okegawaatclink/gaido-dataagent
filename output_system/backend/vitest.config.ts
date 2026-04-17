@@ -4,9 +4,15 @@ import path from 'path'
 export default defineConfig({
   test: {
     // backendパッケージから見た相対パスで test/unit 配下のテストファイルを探す
-    // output_system/test/unit/*.test.ts を対象
+    // output_system/test/unit/*.test.ts を対象（frontend/ サブディレクトリは除外）
     include: ['../test/unit/**/*.test.ts'],
+    exclude: ['../test/unit/frontend/**'],
     environment: 'node',
+    // テスト環境ではレートリミット上限を無効化レベルに設定
+    env: {
+      CHAT_RATE_LIMIT_MAX: '100000',
+      CHAT_RATE_LIMIT_WINDOW: '1',
+    },
     coverage: {
       provider: 'v8',
       // カバレッジ対象: services/ 配下のサービスファイル
