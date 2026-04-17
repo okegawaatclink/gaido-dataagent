@@ -10,6 +10,7 @@
  * - 最後のアシスタントメッセージを逐次更新（immer不使用、React標準setState）
  * - AbortController でストリームのキャンセルに対応（コンポーネントアンマウント時）
  * - conversationId を管理し、継続会話のリクエストに含める（PBI #13 Epic 4）
+ * - 履歴復元は restoreConversation() ラッパー経由で行い、内部 setState を外部に公開しない
  *
  * SSEイベント仕様（api.md / chat.ts 準拠）:
  *   event: message      - テキストチャンク（chunk プロパティ）
@@ -117,8 +118,11 @@ function createAssistantMessage(): ChatMessage {
  * - conversationId: 現在の会話ID（バックエンドから SSE conversation イベントで受け取る）
  * - send: 質問を送信する非同期関数
  * - clearMessages: 会話をリセットする関数（conversationId もリセット）
- * - setMessages: 外部（履歴復元時）からメッセージを設定する関数
- * - setConversationId: 外部から conversationId を設定する関数（履歴復元時）
+ * - restoreConversation: 履歴から会話を復元するラッパー関数（messages と conversationId を一括設定）
+ *
+ * 設計原則:
+ * - React 内部型（React.Dispatch）は公開インターフェースに露出させない
+ * - 外部から状態を変更する場合は意図が明確なラッパー関数を通じて行う
  */
 export function useChat(): UseChatReturn {
   // 会話内のメッセージ一覧
@@ -345,13 +349,30 @@ export function useChat(): UseChatReturn {
     setConversationId(null)
   }, [])
 
+  /**
+   * 履歴から会話を復元するラッパー関数
+   *
+   * React.Dispatch 型を直接公開する代わりに、履歴復元という操作の意図を
+   * 明確に表現した専用ラッパーを提供する。
+   * これにより、useChat の内部状態管理の実装詳細（setState）を外部に漏洩させない。
+   *
+   * @param id       - 復元する会話のID
+   * @param loadedMessages - 復元するメッセージ一覧（GET /api/history/:id のレスポンス）
+   */
+  const restoreConversation = useCallback(
+    (id: string, loadedMessages: ChatMessage[]) => {
+      setMessages(loadedMessages)
+      setConversationId(id)
+    },
+    [],
+  )
+
   return {
     messages,
     isLoading,
     conversationId,
     send,
     clearMessages,
-    setMessages,
-    setConversationId,
+    restoreConversation,
   }
 }

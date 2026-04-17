@@ -19,7 +19,7 @@
  */
 
 import { Router, Request, Response } from 'express'
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import { validate as uuidValidate } from 'uuid'
 import {
   getHistoryDb,
@@ -51,11 +51,14 @@ const historyRateLimiter = rateLimit({
     error: 'リクエスト数が制限を超えました。しばらく待ってから再試行してください。',
   },
   keyGenerator: (req) => {
-    const forwarded = req.headers['x-forwarded-for']
-    if (typeof forwarded === 'string') {
-      return forwarded.split(',')[0].trim()
-    }
-    return req.ip ?? 'unknown'
+    // X-Forwarded-For は任意の値に偽装可能（IPスプーフィングによるレートリミット回避リスク）。
+    // このサービスはリバースプロキシを経由しない直接公開構成のため、
+    // 直接接続 IP（req.socket.remoteAddress）のみを信頼する。
+    // ipKeyGenerator を使用して IPv6 アドレスを /56 サブネット単位に正規化する
+    //（IPv6 ユーザーが異なるアドレスで回避するのを防ぐ）。
+    // リバースプロキシ導入時は index.ts で app.set('trust proxy', 1) を設定し、
+    // keyGenerator: (req) => ipKeyGenerator(req.ip ?? '') に切り替えること。
+    return ipKeyGenerator(req.socket.remoteAddress ?? 'unknown')
   },
 })
 

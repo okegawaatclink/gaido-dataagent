@@ -65,6 +65,7 @@ describe('useChat', () => {
    * 【テスト対象】useChat フックの初期状態
    * 【テスト内容】フック初期化時の状態を確認
    * 【期待結果】messages が空配列、isLoading が false、conversationId が null であること
+   * setMessages / setConversationId は公開 API から削除し、restoreConversation ラッパーに統合された
    */
   it('should initialize with empty messages and not loading', () => {
     // Act
@@ -76,8 +77,11 @@ describe('useChat', () => {
     expect(result.current.conversationId).toBeNull()
     expect(typeof result.current.send).toBe('function')
     expect(typeof result.current.clearMessages).toBe('function')
-    expect(typeof result.current.setMessages).toBe('function')
-    expect(typeof result.current.setConversationId).toBe('function')
+    // setMessages / setConversationId は公開 API に存在しないこと（React.Dispatch を露出しない設計）
+    expect((result.current as Record<string, unknown>).setMessages).toBeUndefined()
+    expect((result.current as Record<string, unknown>).setConversationId).toBeUndefined()
+    // 代わりに restoreConversation ラッパーが公開されていること
+    expect(typeof result.current.restoreConversation).toBe('function')
   })
 
   /**
@@ -317,6 +321,52 @@ describe('useChat', () => {
     expect(result.current.isLoading).toBe(false)
     // PBI #13 追加: clearMessages で conversationId もリセットされること
     expect(result.current.conversationId).toBeNull()
+  })
+
+  /**
+   * 【テスト対象】useChat の restoreConversation 関数
+   * 【テスト内容】restoreConversation を呼ぶと messages と conversationId が一括で設定されること
+   * 【期待結果】渡した messages と id が state に反映されること
+   * （React.Dispatch を直接露出する setMessages/setConversationId の代替）
+   */
+  it('should restore conversation with restoreConversation wrapper', () => {
+    // Arrange
+    const { result } = renderHook(() => useChat())
+    const testId = 'conv-test-uuid'
+    const testMessages = [
+      {
+        id: 'msg-1',
+        role: 'user' as const,
+        content: '過去の質問',
+        sql: null,
+        chartType: null,
+        result: null,
+        error: null,
+        isStreaming: false,
+        createdAt: new Date(),
+      },
+      {
+        id: 'msg-2',
+        role: 'assistant' as const,
+        content: '過去の回答',
+        sql: null,
+        chartType: null,
+        result: null,
+        error: null,
+        isStreaming: false,
+        createdAt: new Date(),
+      },
+    ]
+
+    // Act: restoreConversation で履歴を復元
+    act(() => {
+      result.current.restoreConversation(testId, testMessages)
+    })
+
+    // Assert: messages と conversationId が設定されること
+    expect(result.current.messages).toHaveLength(2)
+    expect(result.current.messages[0].content).toBe('過去の質問')
+    expect(result.current.conversationId).toBe(testId)
   })
 
   /**

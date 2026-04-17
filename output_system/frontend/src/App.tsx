@@ -37,8 +37,7 @@ const App: FC = () => {
     conversationId,
     send,
     clearMessages,
-    setMessages,
-    setConversationId,
+    restoreConversation,
   } = useChat()
 
   // 会話履歴（一覧取得・リフレッシュ）
@@ -86,6 +85,8 @@ const App: FC = () => {
    * 会話を選択して復元する
    *
    * GET /api/history/:id でメッセージを取得し、チャットエリアに表示する。
+   * restoreConversation() ラッパー経由で messages と conversationId を一括設定することで、
+   * useChat の内部 setState（React.Dispatch）を App.tsx に露出させない。
    * 会話が見つからない場合（404）はアラートを表示する。
    *
    * @param id - 選択する会話のID
@@ -93,8 +94,9 @@ const App: FC = () => {
   const handleSelectConversation = useCallback(async (id: string) => {
     try {
       const loadedMessages = await loadConversation(id)
-      setMessages(loadedMessages)
-      setConversationId(id)
+      // restoreConversation() で messages と conversationId を一括設定する
+      // （React.Dispatch を直接呼ぶ代わりに専用ラッパーを使用）
+      restoreConversation(id, loadedMessages)
     } catch (err) {
       const message = err instanceof Error ? err.message : '会話の取得に失敗しました'
       if (message === '会話が見つかりません') {
@@ -104,38 +106,20 @@ const App: FC = () => {
         alert(`会話の読み込みに失敗しました: ${message}`)
       }
     }
-  }, [loadConversation, setMessages, setConversationId, refreshHistory])
+  }, [loadConversation, restoreConversation, refreshHistory])
 
   /**
-   * 履歴リフレッシュ + アクティブ会話が削除された場合はクリア
+   * 履歴リフレッシュコールバック（Sidebar の onHistoryRefresh）
    *
-   * Sidebar の onHistoryRefresh コールバック。
-   * 削除された会話が現在アクティブな会話だった場合、チャットをクリアして空状態に戻す。
-   *
-   * @param deletedId - 削除された会話のID（省略時は単純リフレッシュ）
+   * 削除後にアクティブ会話が一覧から消えたかどうかの判定は、
+   * refreshHistory() 完了後に conversations が更新されるため、
+   * 下記の useEffect（conversations 変化時）で行う。
+   * この関数では単純に履歴一覧を最新化するだけでよく、
+   * deletedId パラメータは不要。
    */
-  const handleHistoryRefresh = useCallback((deletedId?: string) => {
+  const handleHistoryRefresh = useCallback(() => {
     refreshHistory()
-    // 削除された会話が現在アクティブな会話だった場合はクリア
-    if (deletedId && deletedId === conversationId) {
-      clearMessages()
-    }
-  }, [refreshHistory, conversationId, clearMessages])
-
-  /**
-   * 削除コールバック（Sidebarから deletedId を受け取れるようにラップ）
-   *
-   * Sidebar の onHistoryRefresh は削除後の id を渡さないため、
-   * Sidebar 側で削除時にアクティブ会話と比較するロジックを追加するか、
-   * ここで conversationId を監視する。
-   * 現在の実装: Sidebar 側が削除後に onHistoryRefresh() を呼び、
-   * App 側では conversationId と conversations 一覧の差分で判断する。
-   */
-  const handleSidebarHistoryRefresh = useCallback(() => {
-    // conversationId が現在の会話の場合、削除後に一覧からなくなったらクリア
-    // この判定は conversations の更新後に行うため、refreshHistory 後の次レンダーで評価される
-    handleHistoryRefresh()
-  }, [handleHistoryRefresh])
+  }, [refreshHistory])
 
   /**
    * 会話一覧が更新された後、アクティブ会話が存在しなくなった場合はクリア
@@ -184,7 +168,7 @@ const App: FC = () => {
           activeConversationId={conversationId}
           onNewChat={handleNewChat}
           onSelectConversation={handleSelectConversation}
-          onHistoryRefresh={handleSidebarHistoryRefresh}
+          onHistoryRefresh={handleHistoryRefresh}
         />
 
         {/* チャットメインエリア */}
