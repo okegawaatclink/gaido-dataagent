@@ -130,7 +130,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
   const { message, conversationId: reqConversationId } = req.body as { message?: string; conversationId?: string }
 
   // message のバリデーション（SSEヘッダー送信前に400で返す）
-  if (!message || message.trim() === '') {
+  if (!message || typeof message !== 'string' || message.trim() === '') {
     res.status(400).json({ error: 'message フィールドは必須です。' })
     return
   }
