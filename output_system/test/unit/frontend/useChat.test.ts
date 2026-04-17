@@ -64,7 +64,7 @@ describe('useChat', () => {
   /**
    * 【テスト対象】useChat フックの初期状態
    * 【テスト内容】フック初期化時の状態を確認
-   * 【期待結果】messages が空配列、isLoading が false であること
+   * 【期待結果】messages が空配列、isLoading が false、conversationId が null であること
    */
   it('should initialize with empty messages and not loading', () => {
     // Act
@@ -73,8 +73,11 @@ describe('useChat', () => {
     // Assert
     expect(result.current.messages).toEqual([])
     expect(result.current.isLoading).toBe(false)
+    expect(result.current.conversationId).toBeNull()
     expect(typeof result.current.send).toBe('function')
     expect(typeof result.current.clearMessages).toBe('function')
+    expect(typeof result.current.setMessages).toBe('function')
+    expect(typeof result.current.setConversationId).toBe('function')
   })
 
   /**
@@ -262,9 +265,35 @@ describe('useChat', () => {
   })
 
   /**
+   * 【テスト対象】useChat の send 関数
+   * 【テスト内容】conversation イベントを受信すると conversationId が更新される（PBI #13）
+   * 【期待結果】conversationId に受信した値が設定されること
+   */
+  it('should set conversationId when conversation event is received', async () => {
+    // Arrange
+    const testConversationId = '550e8400-e29b-41d4-a716-446655440001'
+    mockChatApi([
+      `event: conversation\ndata: {"conversationId":"${testConversationId}"}\n\n`,
+      'event: message\ndata: {"chunk":"回答"}\n\n',
+      'event: done\ndata: {}\n\n',
+    ])
+    const { result } = renderHook(() => useChat())
+
+    // Act
+    await act(async () => {
+      await result.current.send('test')
+    })
+
+    // Assert: conversationId が設定されること
+    await waitFor(() => {
+      expect(result.current.conversationId).toBe(testConversationId)
+    })
+  })
+
+  /**
    * 【テスト対象】useChat の clearMessages 関数
-   * 【テスト内容】clearMessages を呼ぶと messages がリセットされること
-   * 【期待結果】messages が空配列になること
+   * 【テスト内容】clearMessages を呼ぶと messages と conversationId がリセットされること
+   * 【期待結果】messages が空配列、conversationId が null になること
    */
   it('should clear messages when clearMessages is called', async () => {
     // Arrange: 先にメッセージを追加
@@ -286,6 +315,8 @@ describe('useChat', () => {
     // Assert
     expect(result.current.messages).toHaveLength(0)
     expect(result.current.isLoading).toBe(false)
+    // PBI #13 追加: clearMessages で conversationId もリセットされること
+    expect(result.current.conversationId).toBeNull()
   })
 
   /**

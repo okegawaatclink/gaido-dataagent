@@ -2,8 +2,15 @@
  * DataAgent フロントエンド 型定義
  *
  * バックエンド（api.md）のSSEイベント仕様に対応する型を定義する。
- * SSEイベント種別: message / sql / chart_type / result / error / done
+ * SSEイベント種別: message / sql / chart_type / result / error / done / conversation
+ *
+ * PBI #13 更新:
+ * - UseChatReturn に conversationId / setMessages / setConversationId を追加
+ * - SseConversationData を追加（event: conversation のデータ型）
  */
+
+// React の Dispatch 型を使用するため import する
+import type React from 'react'
 
 // ---------------------------------------------------------------------------
 // チャット関連
@@ -108,6 +115,14 @@ export interface SseErrorData {
   message: string
 }
 
+/**
+ * SSE: conversation イベントのデータ（PBI #13 Epic 4 追加）
+ * バックエンドが新規会話作成時にフロントエンドに通知する会話ID
+ */
+export interface SseConversationData {
+  conversationId: string
+}
+
 // ---------------------------------------------------------------------------
 // useChat フックの返り値型
 // ---------------------------------------------------------------------------
@@ -115,14 +130,25 @@ export interface SseErrorData {
 /**
  * useChat フックの返り値
  *
- * @property messages     - 現在の会話のメッセージ一覧
- * @property isLoading    - LLMの応答待ち中かどうか（送信中〜done受信まで）
- * @property send         - 質問を送信する関数
- * @property clearMessages - 会話をリセットする関数
+ * PBI #13 更新:
+ * - conversationId を追加（現在の会話ID。新規会話時は null）
+ * - setMessages を追加（履歴復元時に外部からメッセージを設定する）
+ * - setConversationId を追加（履歴復元時に外部から会話IDを設定する）
+ *
+ * @property messages          - 現在の会話のメッセージ一覧
+ * @property isLoading         - LLMの応答待ち中かどうか（送信中〜done受信まで）
+ * @property conversationId    - 現在の会話ID（バックエンドから受け取る。null = 新規会話）
+ * @property send              - 質問を送信する関数
+ * @property clearMessages     - 会話をリセットする関数（conversationId もリセット）
+ * @property setMessages       - メッセージを外部から設定する関数（履歴復元用）
+ * @property setConversationId - 会話IDを外部から設定する関数（履歴復元用）
  */
 export interface UseChatReturn {
   messages: ChatMessage[]
   isLoading: boolean
+  conversationId: string | null
   send: (message: string) => Promise<void>
   clearMessages: () => void
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>
+  setConversationId: React.Dispatch<React.SetStateAction<string | null>>
 }

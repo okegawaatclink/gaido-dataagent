@@ -1,22 +1,38 @@
 /**
  * ChatContainer コンポーネント
  *
- * チャット画面のメインコンテナ。useChat フックを利用して
- * チャットエリア（メッセージリスト）と入力エリアを統合する。
+ * チャット画面のメインコンテナ。メッセージリストと入力エリアを統合する。
+ *
+ * PBI #13 更新（Epic 4 - 履歴管理）:
+ * - useChat フックを直接呼ばず、App.tsx から Props で messages / isLoading / onSend を受け取る
+ * - これにより App.tsx が useChat と useHistory を統合した状態管理を担える
  *
  * レイアウト:
  * - チャットエリア: スクロール可能な領域（最新メッセージが下に表示）
- * - 入力エリア: 下部固定（ChitInput コンポーネント）
+ * - 入力エリア: 下部固定（ChatInput コンポーネント）
  *
  * ウェルカムメッセージ:
  * - メッセージが0件の場合は使い方のヒントを表示する
  */
 
 import { useEffect, useRef, type FC } from 'react'
-import { useChat } from '../../hooks/useChat'
+import type { ChatMessage as ChatMessageType } from '../../types'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
 import Loading from '../common/Loading'
+
+/**
+ * ChatContainer コンポーネントの Props
+ *
+ * @property messages   - 現在の会話のメッセージ一覧（App.tsx の useChat から渡す）
+ * @property isLoading  - LLMの応答待ち中かどうか
+ * @property onSend     - メッセージ送信ハンドラ
+ */
+interface ChatContainerProps {
+  messages: ChatMessageType[]
+  isLoading: boolean
+  onSend: (message: string) => Promise<void>
+}
 
 /**
  * チャットコンテナコンポーネント
@@ -24,12 +40,9 @@ import Loading from '../common/Loading'
  * チャット全体（メッセージ一覧 + 入力フォーム）を管理する。
  * メッセージ追加時は自動的に最下部にスクロールする。
  *
- * Props なし（useChat フックが全状態を管理する）
+ * @param props - ChatContainerProps
  */
-const ChatContainer: FC = () => {
-  // チャット状態と操作関数を useChat フックから取得
-  const { messages, isLoading, send } = useChat()
-
+const ChatContainer: FC<ChatContainerProps> = ({ messages, isLoading, onSend }) => {
   // チャットエリアの最下部へのスクロール用 ref
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -93,7 +106,7 @@ const ChatContainer: FC = () => {
 
       {/* 入力エリア（下部固定） */}
       <div className="chat-input-wrapper">
-        <ChatInput onSend={send} isLoading={isLoading} />
+        <ChatInput onSend={onSend} isLoading={isLoading} />
       </div>
     </div>
   )
