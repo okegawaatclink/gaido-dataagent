@@ -833,3 +833,85 @@ body {
 .data-table-empty__text {
   font-size: 0.875rem;
 }
+
+/* ==========================================================================
+   ChartRenderer スタイル（Epic 3 PBI 3.1）
+   ========================================================================== */
+
+/* グラフコンテナ */
+.chart-renderer {
+  width: 100%;
+  background: var(--color-surface, #ffffff);
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #e2e8f0);
+  overflow: hidden;
+}
+
+/* タブナビゲーション */
+.chart-renderer__tabs {
+  display: flex;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  background: var(--color-background, #f8fafc);
+  overflow-x: auto;
+  /* スクロールバーを細くする（モバイル対応） */
+  scrollbar-width: thin;
+}
+
+/* タブボタン */
+.chart-renderer__tab {
+  flex-shrink: 0;
+  padding: 10px 18px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-secondary, #64748b);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+
+.chart-renderer__tab:hover:not(:disabled) {
+  color: var(--color-primary, #3b82f6);
+  background: var(--color-primary-hover, #eff6ff);
+}
+
+/* アクティブタブ */
+.chart-renderer__tab--active {
+  color: var(--color-primary, #3b82f6);
+  border-bottom-color: var(--color-primary, #3b82f6);
+}
+
+/* 無効タブ（数値系列がない場合） */
+.chart-renderer__tab--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* タブパネル（グラフ描画エリア） */
+.chart-renderer__panel {
+  padding: 16px;
+}
+
+/* ==========================================================================
+   共通グラフスタイル（BarChart / LineChart / PieChart）
+   ========================================================================== */
+
+/* グラフラッパー */
+.chart-wrapper {
+  width: 100%;
+}
+
+/* データなしプレースホルダ */
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  color: var(--color-text-secondary, #64748b);
+}
+
+.chart-empty__text {
+  font-size: 0.875rem;
+}
