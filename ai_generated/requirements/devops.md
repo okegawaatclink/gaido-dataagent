@@ -2,7 +2,7 @@
 
 ## デプロイ構成
 
-Docker Composeで web（フロントエンド+バックエンド） + MySQL + phpMyAdmin を一括起動する構成。
+Docker Composeで web（フロントエンド+バックエンド） + MySQL + phpMyAdmin + mock-api を一括起動する構成。
 
 ## 環境変数
 
@@ -23,6 +23,7 @@ Docker Composeで web（フロントエンド+バックエンド） + MySQL + ph
 | PHPMYADMIN_PORT | phpMyAdminのポート | 8080 |
 | BACKEND_PORT | バックエンドポート | 3002 |
 | FRONTEND_PORT | フロントエンドポート | 3001 |
+| MOCK_API_PORT | モックAPIサーバーポート | 3003 |
 
 ## コマンド
 
@@ -68,7 +69,8 @@ services:
     env_file:
       - .env
     environment:
-      - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=<instance-config参��>
+      - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=<instance-config参照>
+      - MOCK_API_URL=http://<instance-config参照>-mock-api:3003
     depends_on:
       mysql:
         condition: service_healthy
@@ -105,6 +107,14 @@ services:
       mysql:
         condition: service_healthy
 
+  mock-api:
+    build:
+      context: ..
+      dockerfile: output_system/Dockerfile.mock-api
+    container_name: <instance-config参照>-mock-api
+    ports:
+      - "${MOCK_API_PORT:-3003}:3003"
+
 volumes:
   mysql-data:
 
@@ -123,3 +133,4 @@ networks:
 | フロントエンド | http://localhost:3001 |
 | バックエンドAPI | http://localhost:3002 |
 | phpMyAdmin | http://localhost:8080 |
+| モックAPIサーバー | http://localhost:3003 |
