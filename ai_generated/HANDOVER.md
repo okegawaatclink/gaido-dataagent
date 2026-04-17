@@ -134,3 +134,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #9: チャット画面から質問を送信し結果JSONを受け取れる（useChat/useStreaming、ChatContainer/ChatInput/ChatMessage/SQLDisplay、DataTable、E2Eテスト6件）
 - PBI #10: Rechartsで棒・折れ線・円グラフを確認できる（chartUtils/BarChart/LineChart/PieChart/ChartRenderer、4タブUI、ユニットテスト29件、E2Eテスト6件）
 - PBI #11: テーブル形式で結果を参照・スクロール閲覧できる（DataTable本格実装、縦横スクロール/sticky header/ゼブラストライプ/NULL表示/数値右寄せ/日付フォーマット/コピー機能、ユニットテスト14件・E2Eテスト8件）
+- PBI #12: 会話・メッセージがSQLiteに保存される（better-sqlite3、historyDb.ts、Repository Pattern、GET/DELETE /api/history、conversationイベント追加、125件ユニットテスト）
