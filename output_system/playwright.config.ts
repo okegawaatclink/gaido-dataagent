@@ -14,6 +14,8 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   // テストファイルのディレクトリ（test-standards.mdのディレクトリ規約に従う）
   testDir: './test',
+  // E2Eテストのみを対象にする（unit/ 配下のVitestファイルを除外）
+  testMatch: '**/e2e/**/*.spec.ts',
 
   // テストのタイムアウト設定（秒）
   timeout: 30000,

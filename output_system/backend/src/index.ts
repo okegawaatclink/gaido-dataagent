@@ -6,6 +6,7 @@
  */
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
 import { closeDb } from './services/database'
 import schemaRouter from './routes/schema'
 import chatRouter from './routes/chat'
@@ -17,6 +18,13 @@ const app = express()
 // =============================================================================
 
 /**
+ * セキュリティヘッダー設定（helmet）
+ * X-Frame-Options, X-Content-Type-Options, Strict-Transport-Security 等を自動設定する。
+ * contentSecurityPolicy は SSE ストリームと両立させるため無効化しない（デフォルト有効）。
+ */
+app.use(helmet())
+
+/**
  * JSON パーサーの設定
  * リクエストボディをJSON形式で受け取れるようにする
  */
@@ -24,18 +32,22 @@ app.use(express.json())
 
 /**
  * CORS設定
- * フロントエンドのオリジン（localhost:3001 および コンテナ名:3001）からのアクセスを許可
- * フロントとバックのオリジンが異なるため明示的に設定が必要
+ * 許可オリジンは環境変数 CORS_ALLOWED_ORIGINS（カンマ区切り）で設定する。
+ * 未設定時はデフォルト値（localhost:3001、コンテナ名:3001）を使用する。
  */
+const DEFAULT_CORS_ORIGINS = [
+  'http://localhost:3001',
+  'http://127.0.0.1:3001',
+  'http://okegawaatclink-gaido-dataagent-output-system:3001',
+]
+
+const allowedOrigins: string[] = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+  : DEFAULT_CORS_ORIGINS
+
 app.use(cors({
-  // 許可するオリジン（フロントエンドのURL）
-  // 環境変数で設定することを推奨、デフォルトはローカル開発用
-  origin: [
-    'http://localhost:3001',
-    'http://127.0.0.1:3001',
-    // AI Agent containerからコンテナ名でアクセスする場合
-    'http://okegawaatclink-gaido-dataagent-output-system:3001',
-  ],
+  // 許可するオリジン（環境変数 CORS_ALLOWED_ORIGINS で上書き可能）
+  origin: allowedOrigins,
   // 認証情報（CookieやAuthorizationヘッダー）を含むリクエストを許可
   credentials: true,
   // 許可するHTTPメソッド

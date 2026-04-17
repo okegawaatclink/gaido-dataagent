@@ -23,6 +23,7 @@
  */
 
 import { Router, Request, Response } from 'express'
+import rateLimit from 'express-rate-limit'
 import { fetchSchema } from '../services/schema'
 import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError } from '../services/llm'
 import { executeQuery, SqlValidationError } from '../services/database'
@@ -31,6 +32,33 @@ const router = Router()
 
 /** message フィールドの最大文字数 */
 const MESSAGE_MAX_LENGTH = 2000
+
+/**
+ * POST /api/chat レートリミット設定
+ *
+ * Claude API は有料のため、Cost Amplification Attack（大量リクエストによるAPI費用増大）を防ぐ。
+ * デフォルト: 10リクエスト/分/IP
+ * 環境変数で上書き可能:
+ *   CHAT_RATE_LIMIT_MAX    - 最大リクエスト数（デフォルト: 10）
+ *   CHAT_RATE_LIMIT_WINDOW - ウィンドウ秒数（デフォルト: 60）
+ */
+const chatRateLimiter = rateLimit({
+  windowMs: parseInt(process.env.CHAT_RATE_LIMIT_WINDOW || '60', 10) * 1000,
+  max: parseInt(process.env.CHAT_RATE_LIMIT_MAX || '10', 10),
+  standardHeaders: true,   // RateLimit-* ヘッダーをレスポンスに含める（RFC 6585準拠）
+  legacyHeaders: false,     // X-RateLimit-* レガシーヘッダーは使用しない
+  message: {
+    error: 'リクエスト数が制限を超えました。しばらく待ってから再試行してください。',
+  },
+  keyGenerator: (req) => {
+    // X-Forwarded-For が信頼できるプロキシから来る場合はそちらを使用
+    const forwarded = req.headers['x-forwarded-for']
+    if (typeof forwarded === 'string') {
+      return forwarded.split(',')[0].trim()
+    }
+    return req.ip ?? 'unknown'
+  },
+})
 
 // ---------------------------------------------------------------------------
 // SSE ヘルパー関数
@@ -86,7 +114,7 @@ function sendSseEvent(res: Response, event: string, data: unknown): void {
  * セキュリティ:
  *   - 内部エラー詳細（DBホスト名等）はサーバーログにのみ記録し、レスポンスには含めない
  */
-router.post('/', async (req: Request, res: Response): Promise<void> => {
+router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<void> => {
   // リクエストボディから message を取得
   const { message } = req.body as { message?: string; conversationId?: string }
 

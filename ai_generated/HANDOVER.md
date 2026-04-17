@@ -36,12 +36,31 @@ output_system/
 │           ├── schema.ts    # INFORMATION_SCHEMAスキーマ取得
 │           ├── sqlValidator.ts  # SQLバリデーター（SELECT以外を拒否）
 │           └── llm.ts       # LLMサービス（Anthropic SDK ストリーミング）
+│   ├── src/
+│   │   ├── App.tsx              # ヘッダー+サイドバー+チャットエリアのレイアウト
+│   │   ├── hooks/
+│   │   │   ├── useChat.ts       # チャット状態管理フック（SSE購読）
+│   │   │   └── useStreaming.ts  # fetch+ReadableStream SSEパーサー
+│   │   ├── types/index.ts       # ChatMessage / QueryResult / SSEイベント型
+│   │   ├── services/api.ts      # VITE_API_BASE_URL ベースAPIURL管理
+│   │   └── components/
+│   │       ├── Chat/            # ChatContainer, ChatInput, ChatMessage, StreamingText
+│   │       ├── SQL/SQLDisplay.tsx  # SQLコードブロック+コピーボタン
+│   │       ├── Chart/DataTable.tsx # クエリ結果テーブル（最大500行）
+│   │       ├── Sidebar/         # Sidebar, HistoryItem
+│   │       └── common/          # Loading, ErrorMessage
 ├── test/
-│   ├── e2e/app.spec.ts          # 疎通確認テスト（3件）
+│   ├── e2e/
+│   │   ├── app.spec.ts          # 疎通確認テスト（3件）
+│   │   └── chat.spec.ts         # チャットE2Eテスト（6件）
 │   └── unit/
 │       ├── schema.test.ts       # スキーマサービスユニットテスト（11件）
 │       ├── sqlValidator.test.ts # SQLバリデーターユニットテスト（27件）
-│       └── llm.test.ts          # LLMサービスユニットテスト（76件）
+│       ├── llm.test.ts          # LLMサービスユニットテスト（76件）
+│       └── frontend/
+│           ├── useStreaming.test.ts  # SSEパーサー 5件
+│           ├── useChat.test.ts      # チャットフック 9件
+│           └── DataTable.test.tsx   # テーブル表示 7件
 ```
 
 ## ビルド・起動方法
@@ -90,6 +109,9 @@ npx playwright test test/e2e/app.spec.ts
 
 - **WSL2でlocalhostポートフォワード不可**: `curl http://localhost:3002` が `ERR_CONNECTION_REFUSED` になる。コンテナIPを使う: `CONTAINER_IP=$(docker inspect <container_name> --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')`
 - **Vite 5のホスト制限**: `allowedHosts` に `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` 環境変数経由でコンテナ名を設定しないとAI Agent containerからアクセスできない
+- **crypto.randomUUID は HTTPS/localhost のみ**: HTTP経由でコンテナ名アクセスする場合は `crypto.randomUUID()` が使えない。`Date.now() + Math.random()` のフォールバックを用意すること
+- **Playwright testMatch 設定**: `testDir: './test'` だけだと unit/ 配下のVitestファイルも拾う。`testMatch: '**/e2e/**/*.spec.ts'` で明示的に絞ること
+- **vite preview にプロキシ機能なし**: `vite preview` は静的ファイルサービスのみ。`/api/xxx` の相対パスリクエストは同一オリジン（3001）に送られる。VITE_API_BASE_URL でバックエンドURLを明示する
 
 ## 実装済み機能
 
@@ -97,3 +119,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #6: ユーザーDB(PostgreSQL/MySQL)へ接続確認できる（knex抽象化、GET /api/schema、INFORMATION_SCHEMAスキーマ取得、ユニットテスト）
 - PBI #7: SELECTのみ実行可能な安全なSQL実行基盤（sqlValidator.ts、database.executeQuery()、二重防御、ユニットテスト27件）
 - PBI #8: Claude APIで自然言語からSQL/グラフ種を生成できる（llm.ts、POST /api/chat SSEストリーミング、ユニットテスト76件）
+- PBI #9: チャット画面から質問を送信し結果JSONを受け取れる（useChat/useStreaming、ChatContainer/ChatInput/ChatMessage/SQLDisplay、DataTable、E2Eテスト6件）

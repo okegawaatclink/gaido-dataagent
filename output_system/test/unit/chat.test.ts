@@ -250,8 +250,10 @@ let app: express.Express
 
 beforeEach(async () => {
   vi.resetAllMocks()
+  // モジュールキャッシュをリセットしてレートリミッタのカウンターを毎テストで初期化する
+  vi.resetModules()
 
-  // テスト用アプリを毎回新規作成（モジュールキャッシュを利用）
+  // テスト用アプリを毎回新規作成（モジュールキャッシュをリセット後にインポート）
   const { default: chatRouter } = await import('../../backend/src/routes/chat')
   app = express()
   app.use(express.json())
