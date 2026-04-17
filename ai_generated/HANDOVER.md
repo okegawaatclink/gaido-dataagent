@@ -53,7 +53,8 @@ output_system/
 │   ├── e2e/
 │   │   ├── app.spec.ts          # 疎通確認テスト（3件）
 │   │   ├── chat.spec.ts         # チャットE2Eテスト（6件）
-│   │   └── chart.spec.ts        # グラフ表示E2Eテスト（6件）
+│   │   ├── chart.spec.ts        # グラフ表示E2Eテスト（6件）
+│   │   └── datatable.spec.ts    # テーブル表示E2Eテスト（8件）
 │   └── unit/
 │       ├── schema.test.ts       # スキーマサービスユニットテスト（11件）
 │       ├── sqlValidator.test.ts # SQLバリデーターユニットテスト（27件）
@@ -61,7 +62,7 @@ output_system/
 │       └── frontend/
 │           ├── useStreaming.test.ts  # SSEパーサー 5件
 │           ├── useChat.test.ts      # チャットフック 9件
-│           ├── DataTable.test.tsx   # テーブル表示 7件
+│           ├── DataTable.test.tsx   # テーブル表示 14件
 │           ├── chartUtils.test.ts   # データ変換ロジック 12件
 │           └── ChartComponents.test.tsx  # グラフコンポーネント 17件
 ```
@@ -110,6 +111,11 @@ npx playwright test test/e2e/app.spec.ts
 - **chartUtils変換戦略**: columns[0]=カテゴリ（X軸）、columns[1+]=数値系列という単純な規約を採用。数値系列がゼロ本の場合canRender=falseでテーブルにフォールバック。DRY原則でBar/Line/PieChartが同一ユーティリティを共有
 - **ChartRendererのデフォルトタブ**: LLM推奨chart_typeをデフォルトとし、数値系列なしの場合はtableにフォールバック。useState初期値はuseMemoで計算した値をそのまま使用
 - **Rechartsテスト環境**: jsdomではResponsiveContainerのResizeObserverが未実装のためエラー。setup.tsにstubを追加。またResponsiveContainerはサイズ0でSVGを描画しないため、vi.mockでdivに差し替えdata-testidで確認する方式を採用
+- **DataTableのNULL表示**: null/undefinedを空文字ではなく "NULL" 文字列として表示しCSSでグレー表示。空文字と区別できるよう視覚的に明示する
+- **DataTableの数値列判定**: isNumericColumn() はNULLを除いた行で判定。全行NULLなら非数値列扱い。id列も数値として右寄せされる（仕様通り）
+- **DataTableの日付フォーマット**: ISO 8601パターン（YYYY-MM-DD/YYYY-MM-DDTHH:mm:ss等）を正規表現で検出し、toLocaleDateString('ja-JP')でフォーマット。日付のみの場合はtimeZone: 'UTC'を指定してタイムゾーンのずれを防止
+- **コピー機能の実装**: Clipboard APIは`window.isSecureContext`が必要。HTTP環境（コンテナ名アクセス）では使えないため、execCommandフォールバックを用意した
+- **strict modeとPlaywright**: `page.locator()`は複数マッチするとstrict modeでエラーになる。`.first()`や`.filter()`で一意に絞ること
 
 ## はまりポイント
 
@@ -127,3 +133,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #8: Claude APIで自然言語からSQL/グラフ種を生成できる（llm.ts、POST /api/chat SSEストリーミング、ユニットテスト76件）
 - PBI #9: チャット画面から質問を送信し結果JSONを受け取れる（useChat/useStreaming、ChatContainer/ChatInput/ChatMessage/SQLDisplay、DataTable、E2Eテスト6件）
 - PBI #10: Rechartsで棒・折れ線・円グラフを確認できる（chartUtils/BarChart/LineChart/PieChart/ChartRenderer、4タブUI、ユニットテスト29件、E2Eテスト6件）
+- PBI #11: テーブル形式で結果を参照・スクロール閲覧できる（DataTable本格実装、縦横スクロール/sticky header/ゼブラストライプ/NULL表示/数値右寄せ/日付フォーマット/コピー機能、ユニットテスト14件・E2Eテスト8件）
