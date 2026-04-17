@@ -1,0 +1,438 @@
+[
+  {
+    "id": "epic-1",
+    "title": "Epic 1: 開発チームがDataAgentの実行基盤を立ち上げられる",
+    "body": "# Epic 1: 開発チームがDataAgentの実行基盤を立ち上げられる\n\n## ユーザーストーリー\n\n**As a** 開発チーム\n**I want to** React + Node.js の DataAgent 実行基盤を Docker Compose で一括起動できるようにしたい\n**So that** 社内の誰でも同じ構成で DataAgent を立ち上げ、以降の機能開発・動作確認を行える\n\n## ビジネス価値\n\n- 新規参画者のオンボーディング時間を短縮（`docker compose up` のみで起動）\n- 開発・検証・本番利用で同じコンテナイメージを使用でき、環境差異による事故を防ぐ\n- フロントエンド/バックエンド/DB接続/LLM接続の疎通を早期に固めることで、以降のEpic群をブロッカなく実装できる\n\n## 成功指標（KPI）\n\n| 指標 | 目標値 | 計測方法 |\n|------|--------|----------|\n| `docker compose up -d` 後に画面表示できるまでの時間 | 3分以内 | 手動計測 |\n| バックエンド `/api/health`（もしくは同等疎通API）の応答 | 200 OK | curl / E2E |\n| `ai_generated/requirements/devops.md` に記載の環境変数が揃っているか | 100% | レビュー |\n\n## INVESTチェック\n\n- [x] **I**ndependent: 他Epicの前提となるが、Epic単体でも「空の雛形アプリが起動する」という価値がある\n- [x] **N**egotiable: 使用するUIフレームワーク詳細（Tailwind採用有無など）は調整可能\n- [x] **V**aluable: 後続Epicの開発効率に直結する基盤価値\n- [x] **E**stimable: `file_structure.md` / `devops.md` / `architecture.md` にスコープ記載済み\n- [x] **S**mall: 1-2スプリントで完了可能（雛形生成+接続確認のみ）\n- [x] **T**estable: `docker compose up` で Frontend/Backend が起動し画面が見えることで検証可能\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、Epic 2以降はすべてこの基盤上で動作する\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes、後からコンテナ化するのは大幅な手戻り\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、`devops.md` / `architecture.md` に明文化済み\n\n## 含まれるPBI\n\n（Issue登録後にTasklistで設定）\n\n## 主要リスク\n\n| リスク | 影響度 | 発生可能性 | 対策 |\n|--------|--------|-----------|------|\n| PostgreSQL/MySQL 両対応のため knex 設定が複雑化 | Med | Med | 最小構成の1DBで疎通後にもう一方を追加する段階的アプローチ |\n| SSL証明書（netskope.cer）無し環境でのビルド失敗 | Med | Low | 証明書ディレクトリが空でもビルドが成功するオプショナル構成（rules/constraints.md準拠） |\n| ポート3001/3002 がホスト側で競合 | Low | Low | `.env` でオーバーライド可能にする |\n\n## 前提条件\n\n- `rules/instance-config.md` に記載のコンテナ名・ネットワーク名・ポートを使用すること\n- Dockerベースイメージは `ubuntu:24.04`（`rules/constraints.md` 準拠）\n- ルート階層にある `ssl-certificates/` を Dockerfile でオプショナルにコピーできること\n\n## 参照ドキュメント\n\n| パス | ファイル名 | 内容 |\n|------|-----------|------|\n| ai_generated/requirements | architecture.md | システム構成図・技術スタック |\n| ai_generated/requirements | devops.md | 環境変数・起動コマンド |\n| ai_generated/requirements | file_structure.md | ディレクトリ構成 |\n| .claude/rules | instance-config.md | コンテナ名・ポート情報 |\n| .claude/rules | constraints.md | Dockerベースイメージ・SSL制約 |\n",
+    "labels": [
+      "epic"
+    ],
+    "type": "epic"
+  },
+  {
+    "id": "epic-2",
+    "title": "Epic 2: 利用者が自然言語で質問してSQLを生成・実行できる",
+    "body": "# Epic 2: 利用者が自然言語で質問してSQLを生成・実行できる\n\n## ユーザーストーリー\n\n**As a** 業務データを参照したい社内ユーザー\n**I want to** 自然言語で質問を投げると SQL が自動生成されて実行結果が返ってくるようにしたい\n**So that** SQL を書けなくても必要な集計データを取得できる\n\n## ビジネス価値\n\n- 非エンジニアでも社内データへアクセスでき、意思決定スピードが向上\n- SQL を人に依頼するコミュニケーションコストが削減される\n- SELECT限定とスキーマ自動投入により、安全かつ高品質な回答を実現\n\n## 成功指標（KPI）\n\n| 指標 | 目標値 | 計測方法 |\n|------|--------|----------|\n| 代表的な質問5件で正しい結果を返す | 5/5 成功 | E2Eテスト（Chrome） |\n| SELECT以外のSQLをブロック | 100% | ユニットテスト + E2E |\n| ストリーミングで逐次表示される | 途中チャンクを確認 | 手動＋E2E |\n\n## INVESTチェック\n\n- [x] **I**ndependent: UI詳細（Epic 3）と履歴（Epic 4）から独立してAPI層で完結\n- [x] **N**egotiable: プロンプト詳細・温度パラメータは調整可能\n- [x] **V**aluable: コアバリュー（自然言語→SQL→結果）そのもの\n- [x] **E**stimable: Claude API / knex / バリデーションと範囲明確\n- [x] **S**mall: 1スプリント相当（API層＋最小UI疎通）\n- [x] **T**estable: 生成SQL・実行結果・SSEイベントを検証可能\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、本システムの主機能\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes、ここが提供価値の本丸\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、intake_notes.md の記載根拠あり\n\n## 含まれるPBI\n\n（Issue登録後にTasklistで設定）\n\n## 主要リスク\n\n| リスク | 影響度 | 発生可能性 | 対策 |\n|--------|--------|-----------|------|\n| LLMが UPDATE/DELETE 等を生成してしまう | High | Med | SQLバリデータで SELECT 以外を拒否、サーバ側で実行直前に再チェック |\n| スキーマ情報が巨大でコンテキストに収まらない | Med | Med | INFORMATION_SCHEMA の取得範囲を必要テーブルに絞るオプション検討 |\n| Claude API キー漏洩 | High | Low | `.env` 管理、コード/コミットに含めないガード |\n\n## 前提条件\n\n- Epic 1 の実行基盤が起動可能なこと\n- `ANTHROPIC_API_KEY` が `.env` に設定されていること\n- リードオンリー権限の DB 接続情報が `.env` に設定されていること\n\n## 参照ドキュメント\n\n| パス | ファイル名 | 内容 |\n|------|-----------|------|\n| ai_generated/requirements | api.md | `/api/chat` `/api/schema` のSSE・レスポンス仕様 |\n| ai_generated/requirements | architecture.md | データフロー図 |\n| ai_generated/requirements | README.md | 機能要件4「SELECTのみ」・非機能（認証なし、読み取り専用） |\n",
+    "labels": [
+      "epic"
+    ],
+    "type": "epic"
+  },
+  {
+    "id": "epic-3",
+    "title": "Epic 3: 利用者がチャット結果をグラフ・テーブルで確認できる",
+    "body": "# Epic 3: 利用者がチャット結果をグラフ・テーブルで確認できる\n\n## ユーザーストーリー\n\n**As a** データ分析を行う社内ユーザー\n**I want to** SQL 実行結果を 棒グラフ／折れ線／円／テーブル で切り替えて確認したい\n**So that** 文脈に応じた可視化で素早く示唆を得られる\n\n## ビジネス価値\n\n- ITリテラシーに関係なくデータの傾向を掴める\n- LLMが推奨するグラフ種類 + 手動切替の併用で使い勝手と効率を両立\n- チャット画面の単一体験でデータ探索が完結し、ツール切替コストをゼロにする\n\n## 成功指標（KPI）\n\n| 指標 | 目標値 | 計測方法 |\n|------|--------|----------|\n| 4種類（bar/line/pie/table）の描画が動作 | 全種OK | E2E＋目視 |\n| LLM推奨グラフ種が自動選択される | 初期表示で反映 | E2E |\n| Chromeで崩れずに表示される | 目視OK | 手動確認 |\n\n## INVESTチェック\n\n- [x] **I**ndependent: Epic 2 の API が返す JSON を受け取る責務のみで成立\n- [x] **N**egotiable: カラーパレット・デフォルトレイアウト等は調整可能\n- [x] **V**aluable: 結果を理解可能にするユーザー価値が明確\n- [x] **E**stimable: Recharts + 4種の描画コンポーネントで範囲明確\n- [x] **S**mall: 1スプリント相当\n- [x] **T**estable: E2E でスクリーンショット検証、またはDOM検査\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、可視化は主機能の一部\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → No/Yes、テーブル表示は最低限必要（Epic 2に含める案もあるが、4種全体ではこの単位が妥当）\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、機能要件5に記載\n\n## 含まれるPBI\n\n（Issue登録後にTasklistで設定）\n\n## 主要リスク\n\n| リスク | 影響度 | 発生可能性 | 対策 |\n|--------|--------|-----------|------|\n| 大量行返却でフロントが重くなる | Med | Med | テーブルはページング（固定件数）、グラフは上位N件に制限 |\n| LLMが誤ったグラフ種を推奨 | Low | Med | ユーザー手動切替ボタンで回避可能にする |\n\n## 前提条件\n\n- Epic 2 が返す `result`（行・列JSON）・`chart_type` を利用する\n- Epic 1 のフロントエンド雛形が起動している\n\n## 参照ドキュメント\n\n| パス | ファイル名 | 内容 |\n|------|-----------|------|\n| ai_generated/requirements | screens.md | チャット画面ワイヤーフレーム |\n| ai_generated/requirements | README.md | 機能要件5,6 / UIレイアウト |\n| ai_generated/requirements | file_structure.md | `frontend/src/components/Chart/*` |\n",
+    "labels": [
+      "epic"
+    ],
+    "type": "epic"
+  },
+  {
+    "id": "epic-4",
+    "title": "Epic 4: 利用者が過去の会話履歴を再利用できる",
+    "body": "# Epic 4: 利用者が過去の会話履歴を再利用できる\n\n## ユーザーストーリー\n\n**As a** 同じような分析を繰り返す社内ユーザー\n**I want to** 左サイドバーから過去の会話を選び、再表示・再質問できるようにしたい\n**So that** 同じ質問を再入力する手間をなくし、前回結果との比較も行える\n\n## ビジネス価値\n\n- よく使うクエリへのアクセスコストを下げ、分析の繰り返し利用を促進\n- 過去結果との差分確認が容易になり、データドリブン文化を後押し\n- 履歴に基づく社内ナレッジ共有の基盤（将来機能への足掛かり）\n\n## 成功指標（KPI）\n\n| 指標 | 目標値 | 計測方法 |\n|------|--------|----------|\n| 履歴一覧の表示件数 | 全件（10件規模で十分動作） | 目視/E2E |\n| 履歴からの会話復元 | 質問・SQL・グラフ再表示 | E2E |\n| 会話削除が動作 | 204応答＋一覧から消える | E2E |\n\n## INVESTチェック\n\n- [x] **I**ndependent: Epic 2/3 と疎結合（API分離・画面の副領域）\n- [x] **N**egotiable: タイトル自動生成アルゴリズムや並び順は調整可能\n- [x] **V**aluable: 再利用性・継続利用体験の向上\n- [x] **E**stimable: SQLite + REST API + サイドバーで範囲明確\n- [x] **S**mall: 1スプリント相当\n- [x] **T**estable: 一覧取得・詳細取得・削除のE2Eで検証可能\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、機能要件7に明記\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → No、ただしデータモデル（会話＋メッセージ）は早期導入が望ましい\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、ユーザー体験の核心部分（PO分析）\n\n## 含まれるPBI\n\n（Issue登録後にTasklistで設定）\n\n## 主要リスク\n\n| リスク | 影響度 | 発生可能性 | 対策 |\n|--------|--------|-----------|------|\n| SQLite ファイルがコンテナ再起動で消える | Med | Med | named volume でデータ永続化（docker-compose）※要件非機能範囲を超える場合はREADMEに注意書き |\n| 履歴データが大きくなりJSON列が肥大化 | Low | Low | MVPでは小規模利用のためリスク小、将来の改善提案として記録 |\n\n## 前提条件\n\n- Epic 2 でチャット応答の生成が成立していること\n- Epic 1 のバックエンドコンテナが起動していること\n\n## 参照ドキュメント\n\n| パス | ファイル名 | 内容 |\n|------|-----------|------|\n| ai_generated/requirements | db.md | conversations / messages ER図 |\n| ai_generated/requirements | api.md | `/api/history` 一連の仕様 |\n| ai_generated/requirements | screens.md | サイドバー（履歴一覧）UI |\n",
+    "labels": [
+      "epic"
+    ],
+    "type": "epic"
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-1-1",
+    "parent_id": "epic-1",
+    "title": "PBI 1.1: 開発者がDocker Composeで雛形アプリを起動できる",
+    "body": "# PBI 1.1: 開発者がDocker Composeで雛形アプリを起動できる\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent を動かしたい開発者\n**I want to** `output_system/` 配下で `docker compose up -d` を実行するだけで frontend と backend の雛形が起動してほしい\n**So that** 機能実装の前に、起動・疎通確認できる足場を手に入れられる\n\n## 価値の説明\n\nDockerfile / docker-compose.yml / ルート package.json / 各サブディレクトリの最小雛形（`frontend/`, `backend/`）を用意し、`rules/instance-config.md` のコンテナ名・ネットワーク名・ポートでアクセスできる状態を作る。\nこの PBI 完了後、以降のPBIでは「起動する」前提を省略して機能実装に集中できる。\n\n## INVESTチェック\n\n- [x] **I**ndependent: 他PBIに依存しない出発点\n- [x] **N**egotiable: 雛形生成の方法（Vite template/手書き）は調整可\n- [x] **V**aluable: 後続すべての開発効率を底上げする価値\n- [x] **E**stimable: devops.md / file_structure.md に従えば範囲明確\n- [x] **S**mall: 1スプリント未満\n- [x] **T**estable: Chromeで画面が表示されること、`docker compose ps` で両サービスが up\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes、後から環境統一は高コスト\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、devops.md / constraints.md に記載\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（この時点では対象コード少、README例・設定のlintは必須）\n- [ ] E2Eテスト合格（疎通のみ: 画面が描画されること）\n- [ ] セキュリティレビュー完了（`.env.example` にダミー値のみ、秘密情報が含まれないこと）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | `output_system/docker-compose.yml` が存在し、`rules/instance-config.md` のコンテナ名・ネットワーク名・ポートでフロント/バックを公開する | [必須] | ○ |\n| 2 | Dockerベースイメージは `ubuntu:24.04` を使用 | [必須] | ○ |\n| 3 | `ssl-certificates/` が空でもビルドが成功する（オプショナルCOPY） | [必須] | ○ |\n| 4 | `docker compose up -d` 後、`http://localhost:3001` で雛形画面（DataAgentタイトル等）が表示される | [必須] | ○ |\n| 5 | `http://localhost:3002/api/health`（または同等のping）が `200 OK` を返す | [必須] | ○ |\n| 6 | `.env.example` に devops.md 記載の変数が揃っている | [必須] | △ |\n\n## 依存関係\n\n- **前提**: なし\n- **後続**: PBI 1.2\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-1-2",
+    "parent_id": "epic-1",
+    "title": "PBI 1.2: 開発者がユーザーDB（PostgreSQL/MySQL）へ接続確認できる",
+    "body": "# PBI 1.2: 開発者がユーザーDB（PostgreSQL/MySQL）へ接続確認できる\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent を運用する開発者\n**I want to** `.env` の接続情報で PostgreSQL または MySQL のいずれにも接続できるようにしたい\n**So that** 既存の社内DB環境へ柔軟にデプロイできる\n\n## 価値の説明\n\n`knex.js` でDB接続を抽象化し、`DB_TYPE` の値に応じてクライアントを切り替える。\nBackend 起動時に INFORMATION_SCHEMA からテーブル・カラム情報を取得できることまでを疎通確認する。\n\n## INVESTチェック\n\n- [x] **I**ndependent: API実装（Epic 2）と切り離してDB疎通層に閉じる\n- [x] **N**egotiable: クライアントライブラリ（knex 以外）への差し替え余地あり\n- [x] **V**aluable: 社内DB環境の多様性に対応できる\n- [x] **E**stimable: architecture.md に記載\n- [x] **S**mall: 1スプリント未満\n- [x] **T**estable: 統合テストで両DBの疎通確認が可能（テストコンテナ使用）\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、Epic 2で必須\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes、後からDBタイプ追加はコスト高\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、機能要件9（スキーマ自動取得）の前提\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（DB接続周りのモック/統合テスト）\n- [ ] E2Eテスト合格（`/api/schema` が200を返し、テーブル一覧を返却）\n- [ ] セキュリティレビュー完了（接続情報がコード・ログに出力されないこと）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | `DB_TYPE=postgresql` のときPostgreSQLへ接続できる | [必須] | ○ |\n| 2 | `DB_TYPE=mysql` のときMySQLへ接続できる | [必須] | ○ |\n| 3 | INFORMATION_SCHEMA からテーブル名・カラム名・型・NULL許容の一覧が取得できる | [必須] | ○ |\n| 4 | 接続失敗時はコンソール／レスポンスに明確なエラーを返す | [必須] | △ |\n| 5 | `GET /api/schema` が api.md 仕様のJSONを返す | [必須] | ○ |\n| 6 | DBユーザーがリードオンリー前提で動作する（書き込み操作を行わない） | [必須] | △ |\n\n## 依存関係\n\n- **前提**: PBI 1.1\n- **後続**: PBI 2.1\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-2-1",
+    "parent_id": "epic-2",
+    "title": "PBI 2.1: 利用者がSELECTのみ実行可能な安全なSQL実行基盤を使える",
+    "body": "# PBI 2.1: 利用者がSELECTのみ実行可能な安全なSQL実行基盤を使える\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent の利用者\n**I want to** 自動生成されたSQLがSELECT文のみ実行され、それ以外はブロックされる仕組みで守られていたい\n**So that** LLMが誤った破壊的SQLを生成してもDBが安全である\n\n## 価値の説明\n\n`sqlValidator` モジュールで SELECT 以外（INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE 等）を拒否し、`database` サービスでの実行直前にも再チェックする二重防御を構築する。\nこれにより、LLMが暴走しても読み取り専用が担保される。\n\n## INVESTチェック\n\n- [x] **I**ndependent: バリデーション + 実行の単機能\n- [x] **N**egotiable: 許可構文の厳密度（CTE・マルチステートメント等）は調整可能\n- [x] **V**aluable: セキュリティ・信頼性の礎\n- [x] **E**stimable: 入出力が明確\n- [x] **S**mall: 1スプリント未満\n- [x] **T**estable: ユニットテストで網羅可能\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、LLM連携の前提\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes、セキュリティ事故は不可逆\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、Security分析に明記\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（バリデータの分岐を網羅）\n- [ ] E2Eテスト合格\n- [ ] セキュリティレビュー完了（許可判定のテストセットがSecurity観点で十分か確認）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | `SELECT ...` クエリは許可される | [必須] | ○ |\n| 2 | `INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE` を含むクエリは拒否される | [必須] | ○ |\n| 3 | 複数ステートメント（`;` で連結されるマルチ文）は拒否される | [必須] | ○ |\n| 4 | バリデータ拒否時は明確なエラーメッセージを返す | [必須] | ○ |\n| 5 | `database.executeQuery(sql)` はバリデータ通過済みSQLのみ実行する | [必須] | ○ |\n| 6 | ユニットテストで代表的OK/NGパターン（10件以上）を検証する | [推奨] | ○ |\n\n## 依存関係\n\n- **前提**: PBI 1.2\n- **後続**: PBI 2.2\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-2-2",
+    "parent_id": "epic-2",
+    "title": "PBI 2.2: 利用者がClaude APIで自然言語からSQL/グラフ種を生成できる",
+    "body": "# PBI 2.2: 利用者がClaude APIで自然言語からSQL/グラフ種を生成できる\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent の利用者\n**I want to** 自然言語の質問を入力すると、Claude API が接続DBのスキーマを考慮してSQLと推奨グラフ種を返してくれる\n**So that** SQLを書かなくても意図したデータを取得できる\n\n## 価値の説明\n\nBackend の `llm` サービスで `@anthropic-ai/sdk` のストリーミングAPIを呼び出し、\n1) スキーマ情報＋質問 をプロンプトに載せる\n2) SQL と `chart_type`（bar/line/pie/table）を JSON で抽出\n3) ストリーミングのまま後続（実行・描画）につなぐ責務を果たす。\n\n## INVESTチェック\n\n- [x] **I**ndependent: SQL実行（PBI 2.1）とUI（Epic 3）とは責務分離\n- [x] **N**egotiable: プロンプト・モデル選択は調整可能\n- [x] **V**aluable: 主機能そのもの\n- [x] **E**stimable: Anthropic SDK / api.md 参照\n- [x] **S**mall: 1スプリント相当\n- [x] **T**estable: モック化したAnthropic SDKでユニット、実APIでスモークテスト\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、本システム成立条件\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、技術選定で Claude 採用\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（LLMサービスの入出力変換・エラーハンドリング）\n- [ ] E2Eテスト合格（代表的質問でSQL生成を確認）\n- [ ] セキュリティレビュー完了（APIキーのログ出力禁止、CORS制限）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | INFORMATION_SCHEMA のテーブル/カラムを Claude プロンプトに渡す | [必須] | ○ |\n| 2 | `/api/chat` が api.md 記載の SSE イベント（`message`/`sql`/`chart_type`/`result`/`error`/`done`）を順に送信する | [必須] | ○ |\n| 3 | SQL 生成結果は PBI 2.1 のバリデータに必ず通される | [必須] | ○ |\n| 4 | LLMから受信した SQL を画面でコードブロック表示可能な形式で返す | [必須] | ○ |\n| 5 | APIキー未設定／LLMエラー時はユーザーに分かるエラーイベントを発火 | [必須] | ○ |\n| 6 | 応答はストリーミング（SSE）で逐次送信される | [必須] | ○ |\n\n## 依存関係\n\n- **前提**: PBI 2.1\n- **後続**: PBI 2.3, PBI 3.1\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-2-3",
+    "parent_id": "epic-2",
+    "title": "PBI 2.3: 利用者がチャット画面から質問を送信し結果JSONを受け取れる",
+    "body": "# PBI 2.3: 利用者がチャット画面から質問を送信し結果JSONを受け取れる\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent の利用者\n**I want to** チャット入力欄に自然言語で質問を投げると、生成されたSQL・実行結果が画面に戻ってきてほしい\n**So that** 画面を離れずに一連の操作が完了する\n\n## 価値の説明\n\n最小機能のチャット画面（入力欄＋メッセージリスト＋SQL表示）で、`/api/chat` のSSEを購読して表示する。\nグラフ描画（Epic 3）・履歴（Epic 4）は含まず、応答JSONを受け取り画面に反映するまでを範囲とする。\n\n## INVESTチェック\n\n- [x] **I**ndependent: 可視化・履歴から独立\n- [x] **N**egotiable: UIレイアウト詳細は画面設計で調整可能\n- [x] **V**aluable: E2Eで動く最初の完成形体験\n- [x] **E**stimable: screens.md / api.md 参照\n- [x] **S**mall: 1スプリント相当\n- [x] **T**estable: E2E でメッセージ送受信を検証\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、以降のPBIの基点\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、screens.md に記載\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（hooks/useChat 等）\n- [ ] E2Eテスト合格（1往復のチャット成功）\n- [ ] セキュリティレビュー完了（XSS: メッセージはエスケープ、SSRFリスク無し）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | 入力欄に質問を入力しEnterで送信できる（Shift+Enterは改行） | [必須] | ○ |\n| 2 | ストリーミングでアシスタント応答が逐次表示される | [必須] | ○ |\n| 3 | 生成SQLがコードブロックで表示される | [必須] | ○ |\n| 4 | 実行結果JSONがテーブル形式（簡易表）で表示される（詳細グラフはPBI 3.x） | [必須] | ○ |\n| 5 | エラー時は「質問を変えてみてください」等のガイドが出る | [必須] | △ |\n| 6 | Chromeで崩れずに表示される | [必須] | △ |\n\n## 依存関係\n\n- **前提**: PBI 2.2\n- **後続**: PBI 3.1\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-3-1",
+    "parent_id": "epic-3",
+    "title": "PBI 3.1: 利用者がRechartsで棒・折れ線・円グラフを確認できる",
+    "body": "# PBI 3.1: 利用者がRechartsで棒・折れ線・円グラフを確認できる\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent の利用者\n**I want to** 結果データを棒グラフ・折れ線グラフ・円グラフで閲覧したい\n**So that** データの傾向や比率を直感的に理解できる\n\n## 価値の説明\n\n`frontend/src/components/Chart/` に `BarChart.tsx`/`LineChart.tsx`/`PieChart.tsx` を追加し、`ChartRenderer.tsx` で LLM が推奨した `chart_type` に応じて描画を振り分ける。\nRecharts の MIT ライセンスを活かし、宣言的に実装する。\n\n## INVESTチェック\n\n- [x] **I**ndependent: テーブル表示（PBI 3.2）と独立\n- [x] **N**egotiable: カラーパレットや凡例位置は調整可能\n- [x] **V**aluable: 可視化の中核\n- [x] **E**stimable: file_structure.md に設計済み\n- [x] **S**mall: 1スプリント相当\n- [x] **T**estable: 代表データでE2E/目視確認可能\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、Epic 3の主要機能\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → No/Yes、グラフ無しは体験として不足\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、機能要件5に記載\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（ChartRendererの切替ロジック）\n- [ ] E2Eテスト合格（各グラフ描画の視認）\n- [ ] セキュリティレビュー完了（入力データのXSS対策）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | `chart_type=bar` の時に棒グラフが描画される | [必須] | ○ |\n| 2 | `chart_type=line` の時に折れ線グラフが描画される | [必須] | ○ |\n| 3 | `chart_type=pie` の時に円グラフが描画される | [必須] | ○ |\n| 4 | ユーザーがグラフ種をタブなどで手動切替できる | [推奨] | △ |\n| 5 | 空データ時は「表示するデータがありません」と表示 | [必須] | ○ |\n| 6 | Chromeで崩れずに表示される | [必須] | △ |\n\n## 依存関係\n\n- **前提**: PBI 2.3\n- **後続**: PBI 3.2\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-3-2",
+    "parent_id": "epic-3",
+    "title": "PBI 3.2: 利用者がテーブル形式で結果を参照・スクロール閲覧できる",
+    "body": "# PBI 3.2: 利用者がテーブル形式で結果を参照・スクロール閲覧できる\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** 生データを直接確認したい利用者\n**I want to** 結果を表形式（カラムヘッダ付き）で閲覧できるようにしたい\n**So that** グラフでは表現しづらい明細レベルの情報を確認できる\n\n## 価値の説明\n\n`components/Chart/DataTable.tsx` を追加し、カラム名・行データを行列表示する。MVP範囲では行数上限（例: 500行）を設け、スクロール可能にする。\n\n## INVESTチェック\n\n- [x] **I**ndependent: グラフ（PBI 3.1）と独立に動作\n- [x] **N**egotiable: ページングの有無・行数上限は調整可能\n- [x] **V**aluable: グラフで表現できない明細値の確認に必須\n- [x] **E**stimable: 単純な表コンポーネント\n- [x] **S**mall: 1スプリント未満\n- [x] **T**estable: E2E で列数・行数を検証\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、機能要件5に記載\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → No、ただし体験必須\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成\n- [ ] E2Eテスト合格\n- [ ] セキュリティレビュー完了（セル値のXSSエスケープ）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | カラム名がヘッダとして表示される | [必須] | ○ |\n| 2 | 行データが縦スクロール可能に表示される | [必須] | ○ |\n| 3 | 500行を超える場合は先頭500行のみ表示し、超過件数を注記する | [推奨] | △ |\n| 4 | `chart_type=table` の時に自動で本コンポーネントが選択される | [必須] | ○ |\n| 5 | null値はハイフン等の代替表記で表示する | [推奨] | △ |\n\n## 依存関係\n\n- **前提**: PBI 3.1\n- **後続**: PBI 4.1\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-4-1",
+    "parent_id": "epic-4",
+    "title": "PBI 4.1: 利用者の会話・メッセージがSQLiteに保存される",
+    "body": "# PBI 4.1: 利用者の会話・メッセージがSQLiteに保存される\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent の利用者\n**I want to** 送信した質問とアシスタントの応答がバックエンド側で永続化されていてほしい\n**So that** 後から履歴を辿って再利用・比較ができる\n\n## 価値の説明\n\n`db.md` の `conversations` / `messages` テーブルをSQLiteで作成し、`/api/chat` 実行時に適切なタイミングでレコードを書き込む。\nこのPBIはデータ層の整備が主眼で、一覧・削除UIは PBI 4.2 で行う。\n\n## INVESTチェック\n\n- [x] **I**ndependent: UI側（PBI 4.2）と切り離せる\n- [x] **N**egotiable: ORM採用有無は調整可能（knex raw SQL でも可）\n- [x] **V**aluable: 履歴体験の土台\n- [x] **E**stimable: db.md にスキーマ明記\n- [x] **S**mall: 1スプリント未満\n- [x] **T**estable: ユニットテスト（保存・取得）で検証可能\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、履歴UIの前提\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → Yes\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、db.md / 機能要件7\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（Repository層）\n- [ ] E2Eテスト合格（`/api/history` が200で一覧を返す）\n- [ ] セキュリティレビュー完了（SQLiteファイルが誤ってリポジトリへコミットされない）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | SQLite の `conversations` / `messages` テーブルが起動時に作成される | [必須] | ○ |\n| 2 | `/api/chat` の1往復で user/assistant 両方の message が保存される | [必須] | ○ |\n| 3 | messages に `sql` / `chart_type` / `query_result` / `error` が db.md 通り保存される | [必須] | ○ |\n| 4 | conversation タイトルは最初の user 質問から自動生成される | [推奨] | △ |\n| 5 | SQLite DB ファイルは `.gitignore` 対象である | [必須] | ○ |\n\n## 依存関係\n\n- **前提**: PBI 2.3\n- **後続**: PBI 4.2\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "pbi",
+    "id": "pbi-4-2",
+    "parent_id": "epic-4",
+    "title": "PBI 4.2: 利用者がサイドバーから履歴を閲覧・選択・削除できる",
+    "body": "# PBI 4.2: 利用者がサイドバーから履歴を閲覧・選択・削除できる\n\n## 親Epic\n\n（Issue登録後にTasklistで設定）\n\n## ユーザーストーリー\n\n**As a** DataAgent の利用者\n**I want to** 左サイドバーに過去の会話一覧が表示され、クリックで復元・×ボタン等で削除できるようにしたい\n**So that** 過去のやり取りをストレスなく再利用・整理できる\n\n## 価値の説明\n\n`/api/history` 3種（一覧・詳細・削除）と Sidebar コンポーネント（`Sidebar.tsx` / `HistoryItem.tsx`）を実装し、選択時にチャットエリアを復元表示する。\n\n## INVESTチェック\n\n- [x] **I**ndependent: 永続化（PBI 4.1）のAPIに依存するが、UI上の責務は独立\n- [x] **N**egotiable: 並び替え（更新日時/作成日時）は調整可能\n- [x] **V**aluable: 再利用性が大幅向上\n- [x] **E**stimable: screens.md / api.md 参照\n- [x] **S**mall: 1スプリント相当\n- [x] **T**estable: 一覧表示／選択復元／削除のE2Eで検証可能\n\n## YAGNIチェック\n\n- [x] 今この瞬間、これがないと先に進めないか？ → Yes、体験上重要\n- [x] 作らないことで10倍以上の手戻りが発生するか？ → No/Yes、PBI 4.1の価値引き出しに必須\n- [x] 推測ではなく実際の要求に基づいているか？ → Yes、機能要件7\n\n## 完成の定義（DoD）\n\n- [ ] 受入条件がすべて満たされている\n- [ ] コードレビュー完了\n- [ ] ユニットテストカバレッジ達成（hooks/useHistory等）\n- [ ] E2Eテスト合格（一覧→選択→削除の一連動作）\n- [ ] セキュリティレビュー完了（ID改ざんリスクの確認）\n\n## 受入条件\n\n| # | 条件 | 品質分類 | 回帰テスト |\n|---|------|----------|-----------|\n| 1 | サイドバーに会話一覧が更新日時降順で表示される | [必須] | ○ |\n| 2 | 履歴アイテムをクリックすると、該当会話がチャットエリアに復元される | [必須] | ○ |\n| 3 | 履歴アイテムの削除操作で `DELETE /api/history/:id` が呼ばれ、一覧からも消える | [必須] | ○ |\n| 4 | 新規会話ボタンで空のチャットエリアに遷移できる | [必須] | ○ |\n| 5 | 存在しないidを指定した復元は `404` を返し、UIに「会話が見つかりません」と表示 | [必須] | △ |\n\n## 依存関係\n\n- **前提**: PBI 4.1\n- **後続**: なし\n\n> ※ `build_tasklist.py` 実行時に「PBI X.Y」がGitHub Issue番号に自動解決されます。\n\n## タスク\n\n（Issue登録後にTasklistで設定）\n",
+    "labels": [
+      "pbi"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-1-1",
+    "parent_id": "pbi-1-1",
+    "title": "Task 1.1.1: output_system配下にプロジェクト雛形（package.json/TS/ディレクトリ）を作成する",
+    "body": "# Task 1.1.1: output_system配下にプロジェクト雛形（package.json/TS/ディレクトリ）を作成する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/package.json`（workspaces: `frontend`, `backend`）を作成\n- `output_system/tsconfig.base.json` を作成（`strict: true`, `esModuleInterop: true`）\n- `file_structure.md` に従って `frontend/src/{components,hooks,services,types,styles}` および `backend/src/{routes,services,types,config}` の空ディレクトリを `.gitkeep` で作成\n- `output_system/.env.example` に `devops.md` 記載の環境変数をダミー値で列挙\n- ルート `.gitignore` に `node_modules/`, `.env`, `*.sqlite` 等を追記\n\n## 完了条件\n\n- [ ] `output_system/package.json` が存在し `npm install` がエラーなく完了する（後続Taskでの検証前提）\n- [ ] `output_system/.env.example` に 9 変数（ANTHROPIC_API_KEY, DB_* 6種, BACKEND_PORT, FRONTEND_PORT）が記述されている\n- [ ] `file_structure.md` と一致するディレクトリ構造が存在する\n\n## 技術的な注意点\n\n- node/npmのバージョンは Node.js 20 系に合わせる\n- `.env` はコミットしない（.gitignore対象）\n- `.env.example` にはAPIキー等の実値を絶対に書かない\n\n## 依存関係\n\n- **前提（これが必要）**: なし\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/file_structure.md\n- ai_generated/requirements/devops.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-1-2",
+    "parent_id": "pbi-1-1",
+    "title": "Task 1.1.2: output_system配下にDockerfile（ubuntu:24.04）を作成する",
+    "body": "# Task 1.1.2: output_system配下にDockerfile（ubuntu:24.04）を作成する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/Dockerfile` を作成\n- ベースイメージは `ubuntu:24.04`（`rules/constraints.md` 準拠）\n- Node.js 20 + build-essential をインストール\n- 企業プロキシ用SSL証明書をオプショナルにコピー（`ssl-certificates/` が空でも成功）\n- `COPY` はビルドコンテキストをルート階層にする構成（`docker-compose.yml` で `context: ..`）\n- frontend/backend の依存インストール（`npm ci`）\n- Vite + Express の両方を起動するエントリ（例: `npm run start:all` で concurrently により同時起動）\n- `EXPOSE 3001 3002`\n\n## 完了条件\n\n- [ ] Dockerfile の `FROM ubuntu:24.04` が使われている\n- [ ] ssl-certificates/ が空でもビルドが成功する\n- [ ] `docker compose build` が成功する\n\n## 技術的な注意点\n\n- 本リポジトリでは `ssl-certificates/` はルート階層にあるため、`docker-compose.yml` の `context: ..` を利用する（rules/constraints.md）\n- NODE_EXTRA_CA_CERTS は証明書がある場合のみ設定\n- Node/npm を apt ではなく NodeSource 経由で入れる場合も証明書設定に注意\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-1-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- .claude/rules/constraints.md\n- ai_generated/requirements/devops.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-1-3",
+    "parent_id": "pbi-1-1",
+    "title": "Task 1.1.3: docker-compose.ymlをinstance-config準拠で作成する",
+    "body": "# Task 1.1.3: docker-compose.ymlをinstance-config準拠で作成する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/docker-compose.yml` を作成\n- `container_name`, ネットワーク名、ポートは `.claude/rules/instance-config.md` の値に合わせる:\n  - コンテナ名（単一構成）: `okegawaatclink-gaido-dataagent-output-system`（フロント）と `okegawaatclink-gaido-dataagent-output-system-backend`（バックエンド）のどちらかに寄せるか、単一コンテナで両ポートを expose するかを設計判断して固定する\n  - Docker ネットワーク: `okegawaatclink-gaido-dataagent-network`（external: true）\n  - フロントエンドポート: 3001、バックエンドポート: 3002\n- `env_file: - .env` を設定\n- `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` にコンテナ名を設定\n- ホストバインドマウントは使用しない\n\n## 完了条件\n\n- [ ] `docker compose up -d` 後、コンテナが起動している（`docker compose ps` で Up）\n- [ ] AI Agent コンテナから `http://<コンテナ名>:3001` にアクセスできる\n- [ ] ホストから `http://localhost:3001` にアクセスできる\n\n## 技術的な注意点\n\n- instance-config.md の単一コンテナ想定に合わせ、1つの web サービスで 3001/3002 の両方を expose する構成でもよい\n- WSL2 では port-forward が効かない場合があるため、コンテナIPでのアクセスも検討（rules/constraints.md）\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-1-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- .claude/rules/instance-config.md\n- .claude/rules/constraints.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-1-4",
+    "parent_id": "pbi-1-1",
+    "title": "Task 1.1.4: フロントエンド雛形（Vite+React+TS）を最小表示までセットアップする",
+    "body": "# Task 1.1.4: フロントエンド雛形（Vite+React+TS）を最小表示までセットアップする\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `frontend/package.json`（react, react-dom, typescript, vite, @vitejs/plugin-react, recharts, @types/*）を作成\n- `frontend/vite.config.ts` を作成（server host `0.0.0.0`, port 3001, `allowedHosts: true` もしくは環境変数連携）\n- `frontend/index.html` と `frontend/src/main.tsx`, `src/App.tsx` を作成\n- `App.tsx` で「DataAgent」という見出しを表示\n- `npm run dev --workspace frontend` で動作することを確認\n\n## 完了条件\n\n- [ ] `http://localhost:3001` を開くと「DataAgent」見出しが表示される\n- [ ] TypeScript の型エラーが出ない\n- [ ] `frontend/package.json` に Recharts が含まれている（後続PBIで利用）\n\n## 技術的な注意点\n\n- Vite 5 はデフォルトで localhost 以外をブロックする → `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` で許可\n- Context7 で最新の React/Vite のセットアップ手順を確認すること（rules/context7.md）\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-1-3\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/file_structure.md\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-1-5",
+    "parent_id": "pbi-1-1",
+    "title": "Task 1.1.5: バックエンド雛形（Express+TS）と/api/health疎通APIを実装する",
+    "body": "# Task 1.1.5: バックエンド雛形（Express+TS）と/api/health疎通APIを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/package.json`（express, typescript, ts-node-dev, cors, @types/* 等）を作成\n- `backend/src/index.ts` で Express を起動（ポート 3002）\n- `GET /api/health` で `{ status: \"ok\" }` を返すエンドポイントを実装\n- CORSはフロントエンドのOriginを許可\n- 起動スクリプト（`npm run dev --workspace backend`）\n\n## 完了条件\n\n- [ ] `curl http://localhost:3002/api/health` で `{\"status\":\"ok\"}` が返る\n- [ ] TypeScript 型エラーがない\n- [ ] フロントエンドから `fetch('/api/health')`（または絶対URL）でアクセスできる\n\n## 技術的な注意点\n\n- CORS はフロント・バックのオリジン不一致があるため明示設定する\n- Context7 で Express 最新のTypeScriptセットアップを確認\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-1-3\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/api.md\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-1-6",
+    "parent_id": "pbi-1-1",
+    "title": "Task 1.1.6: 疎通E2Eテスト（Playwright）でフロント起動を確認する",
+    "body": "# Task 1.1.6: 疎通E2Eテスト（Playwright）でフロント起動を確認する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/test/e2e/` に Playwright の設定を追加\n- ベースURLは `rules/instance-config.md` に従ってコンテナ名URLを使用（localhost禁止）\n- 「DataAgent」見出しが表示されることをテスト\n- `playwright.config.ts` は AI Agent コンテナから実行する前提で作成\n\n## 完了条件\n\n- [ ] `npx playwright test` がフロント起動中に成功する\n- [ ] テストは `http://okegawaatclink-gaido-dataagent-output-system:3001` を参照する\n- [ ] CIから実行可能な構成である（docker compose up 後に実行）\n\n## 技術的な注意点\n\n- rules/constraints.md の「PlaywrightからのURL指定ルール」を遵守\n- Playwright は AI Agent container にプリインストール済み（`npx playwright install` 不要）\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-1-4, task-1-1-5\n- **ブロッカー**: なし\n\n## 参考資料\n\n- .claude/rules/constraints.md\n- skills/test-standards\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-2-1",
+    "parent_id": "pbi-1-2",
+    "title": "Task 1.2.1: knexでDB接続ファクトリを実装する",
+    "body": "# Task 1.2.1: knexでDB接続ファクトリを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/services/database.ts` を作成\n- `DB_TYPE` (`postgresql` / `mysql`) によって knex のクライアントを切り替えるファクトリ関数\n- 依存: `knex`, `pg`, `mysql2`（package.json追加）\n- シングルトンとして接続を保持\n- アプリ終了時のコネクションクローズ処理\n\n## 完了条件\n\n- [ ] `createDb()` 関数が `DB_TYPE` で適切なクライアントを返す\n- [ ] DB未設定時は明確なエラーをスローする\n- [ ] ユニットテスト（モック）で両クライアントのパスを通す\n\n## 技術的な注意点\n\n- knex はクエリビルダで、SELECT専用は別途バリデーション層で担保（PBI 2.1）\n- Context7 で knex v3 の初期化方法を確認\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-1-5\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/architecture.md\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-2-2",
+    "parent_id": "pbi-1-2",
+    "title": "Task 1.2.2: スキーマ情報取得サービス(INFORMATION_SCHEMA)を実装する",
+    "body": "# Task 1.2.2: スキーマ情報取得サービス(INFORMATION_SCHEMA)を実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/services/schema.ts` を作成\n- PostgreSQL / MySQL の INFORMATION_SCHEMA からテーブル名・カラム名・型・NULL許容を取得\n- 出力形式は `api.md` の `/api/schema` レスポンスと同一\n- DBごとの SQL 差異を吸収するヘルパー関数を用意\n\n## 完了条件\n\n- [ ] `fetchSchema()` が `{database, tables: [{name, columns: [...]}]}` 形式で返す\n- [ ] PostgreSQL / MySQL の両方で動作する\n- [ ] ユニットテスト（両DB向けSQL文字列の検証）が通る\n\n## 技術的な注意点\n\n- PostgreSQL では `table_schema = current_schema()` 等でフィルタ\n- MySQL では `table_schema = DATABASE()`\n- 大量テーブルDBでのパフォーマンスは将来対応\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-2-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/api.md\n- ai_generated/requirements/db.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-2-3",
+    "parent_id": "pbi-1-2",
+    "title": "Task 1.2.3: /api/schema エンドポイントを実装する",
+    "body": "# Task 1.2.3: /api/schema エンドポイントを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/routes/schema.ts` を作成\n- `GET /api/schema` で `services/schema.ts` を呼び、JSONを返す\n- `index.ts` からルートを登録\n- エラー時は `500` とエラーメッセージを返す\n\n## 完了条件\n\n- [ ] `GET /api/schema` が 200 と api.md 仕様のJSONを返す\n- [ ] DB接続失敗時は 500 を返す\n- [ ] ユニットテスト + E2E（疎通）が通る\n\n## 技術的な注意点\n\n- レスポンスのキーは camelCase に統一（api.md 例と合わせる）\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-2-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/api.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-1-2-4",
+    "parent_id": "pbi-1-2",
+    "title": "Task 1.2.4: スキーマ取得のユニットテストを追加する",
+    "body": "# Task 1.2.4: スキーマ取得のユニットテストを追加する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/test/unit/schema.test.ts` を作成\n- `services/schema.ts` をモックDBで単体テスト\n- PostgreSQL/MySQL の SQL文字列が期待通りに構築されることを検証\n- カバレッジ: services/schema.ts に対して 80% 以上\n\n## 完了条件\n\n- [ ] `npm test` で `schema.test.ts` が成功する\n- [ ] 両DBの分岐が検証されている\n- [ ] カバレッジが 80% 以上\n\n## 技術的な注意点\n\n- `skills/test-standards` のテンプレートに従うこと\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-2-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- skills/test-standards\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-1-1",
+    "parent_id": "pbi-2-1",
+    "title": "Task 2.1.1: SQLValidatorサービスを実装しSELECT以外を拒否する",
+    "body": "# Task 2.1.1: SQLValidatorサービスを実装しSELECT以外を拒否する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/services/sqlValidator.ts` を作成\n- 入力SQL文字列に対して下記のチェックを行う:\n  - 先頭キーワードが `SELECT` または `WITH` で始まる（CTEも許可）こと\n  - `INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE/GRANT/REVOKE` が含まれないこと\n  - `;` で区切られた複数ステートメントが含まれないこと（末尾の1セミコロンは許容）\n  - コメント（`--`, `/* ... */`）内に隠された危険キーワードがないよう、コメントを除去してから検査\n- 許可/拒否結果とエラーメッセージを返すインタフェース\n\n## 完了条件\n\n- [ ] `validate(sql)` が `{ ok: boolean, reason?: string }` を返す\n- [ ] SELECT / WITH の許可パターンと、代表的 DDL/DML の拒否パターンを実装\n- [ ] ユニットテスト 10 ケース以上が通る\n\n## 技術的な注意点\n\n- 将来的な誤検知抑制のため、複雑な正規化は必要最低限に留める\n- Context7 で `node-sql-parser` 等の既存ライブラリ採用可否も検討してよい（ただし MIT ライセンスを優先）\n\n## 依存関係\n\n- **前提（これが必要）**: なし\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/README.md Security分析\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-1-2",
+    "parent_id": "pbi-2-1",
+    "title": "Task 2.1.2: DB実行関数にSQLValidator二重チェックを組み込む",
+    "body": "# Task 2.1.2: DB実行関数にSQLValidator二重チェックを組み込む\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/services/database.ts` に `executeQuery(sql)` を追加\n- 実行直前に `sqlValidator.validate(sql)` を呼び、NGなら例外\n- OKなら knex.raw() で実行し、結果を正規化した `{columns: [...], rows: [...]}` で返す\n- エラーは Messages 用にラップする\n\n## 完了条件\n\n- [ ] `executeQuery(sql)` が SELECT 以外の SQL で例外を投げる\n- [ ] 正常SELECTで `{columns, rows}` を返す\n- [ ] エラーは上位に伝播しつつ、SSE / ログ向けに整形できる\n\n## 技術的な注意点\n\n- 返却行の BigInt / Date 型はJSON化可能な形式に変換する（rules/hallucination.md: Context7で knex 結果の型を確認）\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-1-1, task-1-2-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/README.md 機能要件4\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-1-3",
+    "parent_id": "pbi-2-1",
+    "title": "Task 2.1.3: SQLValidatorのユニットテストを追加する",
+    "body": "# Task 2.1.3: SQLValidatorのユニットテストを追加する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/test/unit/sqlValidator.test.ts` を作成\n- 許可パターン: 単純SELECT, JOIN, サブクエリ, CTE (WITH)\n- 拒否パターン: INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, マルチステートメント, コメント内の危険語\n- 境界: 空文字、空白のみ、セミコロンのみ\n\n## 完了条件\n\n- [ ] 10 ケース以上のテストが通る\n- [ ] カバレッジ 80% 以上\n- [ ] `skills/test-standards` のディレクトリ/命名規約に準拠\n\n## 技術的な注意点\n\n- ユニットテストはCIで必ず実行されるよう package.json の `test` スクリプトに登録する\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-1-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- skills/test-standards\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-2-1",
+    "parent_id": "pbi-2-2",
+    "title": "Task 2.2.1: Anthropic SDKを使うLLMサービスの骨格を実装する",
+    "body": "# Task 2.2.1: Anthropic SDKを使うLLMサービスの骨格を実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/services/llm.ts` を作成\n- 依存: `@anthropic-ai/sdk`（package.json 追加）\n- `ANTHROPIC_API_KEY` を環境変数から取得し、未設定時は明確な例外を投げる\n- プロンプトテンプレート: システムプロンプトに「与えられたスキーマ情報を参照し、SELECT文のみ、かつ可視化に適したクエリを生成する」「`chart_type` を `bar|line|pie|table` から選ぶ」を明記\n- 入力: ユーザー質問, スキーマ情報\n- 出力: ストリーミングレスポンスをラップし、呼び出し側に yield する形\n\n## 完了条件\n\n- [ ] `llmService.generate({ question, schema })` がasync iterableを返す\n- [ ] APIキー未設定時は例外で失敗する\n- [ ] ユニットテスト（SDKモック）で基本動作が確認できる\n\n## 技術的な注意点\n\n- Context7 で `@anthropic-ai/sdk` の streaming API 仕様を確認（rules/context7.md）\n- モデル名は可搬性のため設定ファイル化すること（例: `ANTHROPIC_MODEL` 環境変数、未設定時は安全なデフォルト）\n\n## 依存関係\n\n- **前提（これが必要）**: task-1-1-5\n- **ブロッカー**: なし\n\n## 参考資料\n\n- .claude/rules/context7.md\n- ai_generated/requirements/README.md 技術選定\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-2-2",
+    "parent_id": "pbi-2-2",
+    "title": "Task 2.2.2: SSEで/api/chatエンドポイントを実装する",
+    "body": "# Task 2.2.2: SSEで/api/chatエンドポイントを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/routes/chat.ts` を作成し `POST /api/chat` を実装\n- レスポンスヘッダを SSE 向けに設定（`Content-Type: text/event-stream`）\n- 処理フロー:\n  1) `services/schema.ts` からスキーマ取得\n  2) `services/llm.ts` でストリーミング呼び出し、途中のテキスト差分は `event: message` で送信\n  3) SQL抽出後に `event: sql` 送信\n  4) `chart_type` 抽出後に `event: chart_type` 送信\n  5) `services/database.executeQuery(sql)` を実行、結果を `event: result` で送信\n  6) エラーは `event: error`、最後に `event: done`\n\n## 完了条件\n\n- [ ] api.md記載のイベント種別が順に送信される\n- [ ] SELECT以外が生成された場合は `event: error` でSQLValidatorメッセージを送信\n- [ ] E2Eでストリーミング応答を確認できる\n\n## 技術的な注意点\n\n- Express での SSE 実装は `res.flushHeaders()` / `res.write('event: ...\\ndata: ...\\n\\n')` を使用\n- JSON 抽出は LLM 出力のパース失敗に強くする（regex ではなく JSON フェンス対応）\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-2-1, task-2-1-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/api.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-2-3",
+    "parent_id": "pbi-2-2",
+    "title": "Task 2.2.3: LLMサービスのユニットテスト（SDKモック）を追加する",
+    "body": "# Task 2.2.3: LLMサービスのユニットテスト（SDKモック）を追加する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/test/unit/llm.test.ts` を作成\n- Anthropic SDK をモックし、ストリーミング入力を疑似チャンクで供給\n- `generate()` が期待通り message/sql/chart_type を yield すること\n- API キー未設定時の例外発火\n\n## 完了条件\n\n- [ ] モックベースのユニットテストが通る\n- [ ] カバレッジ 80% 以上\n- [ ] skills/test-standards 準拠\n\n## 技術的な注意点\n\n- SDKのレスポンス型は Context7 で確認する\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-2-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-3-1",
+    "parent_id": "pbi-2-3",
+    "title": "Task 2.3.1: useChat/useStreamingフックで/api/chatのSSEを購読する",
+    "body": "# Task 2.3.1: useChat/useStreamingフックで/api/chatのSSEを購読する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `frontend/src/hooks/useChat.ts` を作成\n- `fetch` + `ReadableStream` で SSE を逐次パース（EventSource は POST 不可のため `fetch` 採用）\n- 受信イベント種別に応じて React state を更新\n- `frontend/src/hooks/useStreaming.ts` に共通ストリーム処理を切り出す\n\n## 完了条件\n\n- [ ] `useChat()` が messages 配列と `send(message)` 関数を返す\n- [ ] SSEイベント（message/sql/chart_type/result/error/done）が state に反映される\n- [ ] エラーハンドリングでユーザ向けメッセージを組み立てられる\n\n## 技術的な注意点\n\n- fetch を使ったSSE読み取りは TextDecoder で chunk を結合し、`\\n\\n` 区切りでイベントを抽出\n- Context7 で fetch Streams の最新用法を確認\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-2-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- .claude/rules/context7.md\n- ai_generated/requirements/api.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-3-2",
+    "parent_id": "pbi-2-3",
+    "title": "Task 2.3.2: ChatContainer/ChatInput/ChatMessage/SQLDisplayコンポーネントを実装する",
+    "body": "# Task 2.3.2: ChatContainer/ChatInput/ChatMessage/SQLDisplayコンポーネントを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `frontend/src/components/Chat/ChatContainer.tsx`（`useChat` を利用）\n- `ChatInput.tsx`（Enter送信/Shift+Enter改行）\n- `ChatMessage.tsx`（user/assistantの表示、Markdown的な最小装飾）\n- `StreamingText.tsx`（逐次テキスト表示）\n- `components/SQL/SQLDisplay.tsx`（コードブロック表示。シンタックスハイライトは任意）\n- `components/common/Loading.tsx` / `ErrorMessage.tsx` も追加\n\n## 完了条件\n\n- [ ] 画面でメッセージ入力→送信→応答の流れが確認できる\n- [ ] 生成SQLがコードブロックで表示される\n- [ ] エラー時はガイド付きで表示される\n\n## 技術的な注意点\n\n- XSS対策: ユーザー入力・LLM出力は必ずエスケープ（React のデフォルト挙動に任せる、dangerouslySetInnerHTML禁止）\n- Context7 で React 18 の Concurrent レンダリング方針を確認\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-3-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/screens.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-3-3",
+    "parent_id": "pbi-2-3",
+    "title": "Task 2.3.3: 結果JSONを簡易テーブルで表示する（Epic 3 前の暫定）",
+    "body": "# Task 2.3.3: 結果JSONを簡易テーブルで表示する（Epic 3 前の暫定）\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `ChatMessage.tsx` 等から `result` イベントの JSON を簡易表形式で表示\n- Epic 3（PBI 3.x）で本格的な Chart/Table コンポーネントに置き換える前提の暫定実装\n- 空配列時は「結果がありません」\n\n## 完了条件\n\n- [ ] 結果の列名と行が表形式で描画される\n- [ ] 行数が多い場合でもブラウザが固まらない（暫定: 上位500行表示）\n\n## 技術的な注意点\n\n- 後のPBIで DataTable に置き換えるため、依存部分はComponent化しておく\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-3-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/api.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-2-3-4",
+    "parent_id": "pbi-2-3",
+    "title": "Task 2.3.4: E2Eテストで1往復チャット成功を確認する",
+    "body": "# Task 2.3.4: E2Eテストで1往復チャット成功を確認する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `output_system/test/e2e/chat.spec.ts` を作成\n- Playwright で以下を検証:\n  - ページを開く\n  - 入力欄にテストクエリを入力→送信\n  - 生成SQL・結果表示が出るまで待機\n- APIキー未設定環境向けに、バックエンドをモックするヘルパーまたは MSW などを検討（フロント単体E2Eでも可）\n\n## 完了条件\n\n- [ ] `npx playwright test` でチャットE2Eが通る\n- [ ] CIに組み込まれている\n- [ ] skills/test-standards 準拠のファイル配置\n\n## 技術的な注意点\n\n- 実 API 呼び出しはコスト/再現性の観点で避け、バックエンドスタブでの検証を基本とする\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-3-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- skills/test-standards\n- .claude/rules/constraints.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-3-1-1",
+    "parent_id": "pbi-3-1",
+    "title": "Task 3.1.1: RechartsでBarChart/LineChart/PieChartコンポーネントを実装する",
+    "body": "# Task 3.1.1: RechartsでBarChart/LineChart/PieChartコンポーネントを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `frontend/src/components/Chart/BarChart.tsx` / `LineChart.tsx` / `PieChart.tsx` を追加\n- Props: `{ columns: string[], rows: any[][] }`\n- 空データ時のプレースホルダ\n- カラーパレットは Recharts デフォルト\n\n## 完了条件\n\n- [ ] 3種のグラフがテストデータで描画される\n- [ ] 空配列で「表示するデータがありません」が表示される\n- [ ] Chrome で崩れない\n\n## 技術的な注意点\n\n- Context7 で Recharts 最新APIを確認（rules/context7.md）\n- 数値カラム / カテゴリカラムの自動推定は最小実装でよい\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-3-3\n- **ブロッカー**: なし\n\n## 参考資料\n\n- .claude/rules/context7.md\n- ai_generated/requirements/file_structure.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-3-1-2",
+    "parent_id": "pbi-3-1",
+    "title": "Task 3.1.2: ChartRendererでchart_typeごとに切替描画する",
+    "body": "# Task 3.1.2: ChartRendererでchart_typeごとに切替描画する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `frontend/src/components/Chart/ChartRenderer.tsx` を実装\n- `chart_type` props で Bar/Line/Pie/Table（DataTable は PBI 3.2 で追加）に切替\n- ユーザーがタブで手動切替できる UI も用意（推奨条件）\n\n## 完了条件\n\n- [ ] `chart_type` に応じて描画切替できる\n- [ ] 手動切替タブでユーザーが任意に切り替え可能\n- [ ] ChatMessage から呼び出して動作確認済み\n\n## 技術的な注意点\n\n- DataTable は PBI 3.2 で差し替えるため、import を切り替えやすい構造にする\n\n## 依存関係\n\n- **前提（これが必要）**: task-3-1-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/README.md 機能要件5,6\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-3-1-3",
+    "parent_id": "pbi-3-1",
+    "title": "Task 3.1.3: グラフ表示のE2Eテストを追加する",
+    "body": "# Task 3.1.3: グラフ表示のE2Eテストを追加する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `test/e2e/chart.spec.ts` を作成\n- バックエンドをモックし、固定の result JSON と chart_type を返す状態でテスト\n- 各 chart_type（bar/line/pie）で対応するグラフ SVG 要素が出現することを検証\n\n## 完了条件\n\n- [ ] 3種のグラフが E2E で検証される\n- [ ] skills/test-standards 準拠\n\n## 技術的な注意点\n\n- Recharts の SVG クラス名を Context7 で確認して selector を決める\n\n## 依存関係\n\n- **前提（これが必要）**: task-3-1-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- skills/test-standards\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-3-2-1",
+    "parent_id": "pbi-3-2",
+    "title": "Task 3.2.1: DataTableコンポーネントを実装する",
+    "body": "# Task 3.2.1: DataTableコンポーネントを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `frontend/src/components/Chart/DataTable.tsx` を作成\n- Props: `{ columns: string[], rows: any[][] }`\n- 縦スクロール可能な `<div style=\"overflow-y: auto; max-height: ...\">` + `<table>`\n- 500行超過時は先頭500行に制限し、注記を表示\n- null 値はハイフンで描画\n\n## 完了条件\n\n- [ ] カラムヘッダ、行データが描画される\n- [ ] 500行超の時に注記が出る\n- [ ] chart_type=table 時に自動選択される（ChartRendererを更新）\n\n## 技術的な注意点\n\n- セル値はReactのテキストノードとして描画しXSSを回避\n- 巨大データはメモ化（useMemo）を検討\n\n## 依存関係\n\n- **前提（これが必要）**: task-3-1-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/README.md 機能要件5\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-3-2-2",
+    "parent_id": "pbi-3-2",
+    "title": "Task 3.2.2: DataTableのユニット/E2Eテストを追加する",
+    "body": "# Task 3.2.2: DataTableのユニット/E2Eテストを追加する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- unit: カラム・行の描画、500行超過時の注記\n- e2e: chart_type=table の結果が表で表示されること\n\n## 完了条件\n\n- [ ] ユニットテストが通る（Vitest/Jest、frontend 側テスト基盤は PBI 1.1 以後に追加されていない場合は本Taskで整備）\n- [ ] E2E（chart.spec.ts に追記）が通る\n\n## 技術的な注意点\n\n- フロントのテスト基盤（Vitest）がまだ無い場合は本Taskで setup すること\n\n## 依存関係\n\n- **前提（これが必要）**: task-3-2-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- skills/test-standards\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-4-1-1",
+    "parent_id": "pbi-4-1",
+    "title": "Task 4.1.1: SQLite初期化とマイグレーションを実装する",
+    "body": "# Task 4.1.1: SQLite初期化とマイグレーションを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- 依存: `better-sqlite3`（同期的でシンプル）または `sqlite3` を package.json に追加\n- `backend/src/services/history.ts` の初期化関数でテーブル作成:\n  - `conversations(id TEXT PK, title TEXT NOT NULL, created_at, updated_at)`\n  - `messages(id TEXT PK, conversation_id TEXT FK, role TEXT, content TEXT, sql TEXT, chart_type TEXT, query_result TEXT, error TEXT, created_at)`\n- 起動時に `CREATE TABLE IF NOT EXISTS` を実行\n- DBファイルパスを環境変数 `HISTORY_DB_PATH`（既定: `/app/data/history.sqlite`）\n\n## 完了条件\n\n- [ ] 起動後に `conversations` / `messages` テーブルが生成される\n- [ ] DBファイルは `.gitignore` 対象\n- [ ] Docker named volume でデータが永続化される（docker-compose.yml 更新）\n\n## 技術的な注意点\n\n- better-sqlite3 はネイティブビルドが必要 → Dockerfile の build 依存に `python3`/`make`/`g++` が必要（ubuntu:24.04 では追加インストール）\n- Context7 で選定ライブラリの最新手順を確認\n\n## 依存関係\n\n- **前提（これが必要）**: task-2-2-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/db.md\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-4-1-2",
+    "parent_id": "pbi-4-1",
+    "title": "Task 4.1.2: /api/chat処理内で会話・メッセージを保存する",
+    "body": "# Task 4.1.2: /api/chat処理内で会話・メッセージを保存する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `/api/chat` ハンドラ内:\n  - `conversationId` 未指定 → 新規 conversation を作成（タイトルは最初の user 質問から先頭 30 文字程度で自動生成）\n  - user message と assistant message（sql/chart_type/query_result/error 含む）を messages に保存\n  - 既存 conversation の updated_at を更新\n\n## 完了条件\n\n- [ ] 1 往復のチャット後に messages に 2 行（user/assistant）が追加される\n- [ ] conversation の updated_at が更新される\n- [ ] 保存エラーはログに残すが、チャット体験は止めない（best effort）\n\n## 技術的な注意点\n\n- トランザクションで conversations + messages をまとめて更新\n- タイトル自動生成はMVPでは単純な先頭文字列抽出でOK\n\n## 依存関係\n\n- **前提（これが必要）**: task-4-1-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/db.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-4-1-3",
+    "parent_id": "pbi-4-1",
+    "title": "Task 4.1.3: 履歴取得API（一覧/詳細）を実装する",
+    "body": "# Task 4.1.3: 履歴取得API（一覧/詳細）を実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `backend/src/routes/history.ts` に以下を実装:\n  - `GET /api/history` → 会話一覧（updated_at 降順）\n  - `GET /api/history/:id` → 会話詳細（messages 配列付き）\n- 存在しないidは404\n\n## 完了条件\n\n- [ ] api.md のレスポンス形式と一致する\n- [ ] 404 が正しく返る\n- [ ] ユニットテスト/E2Eで動作確認\n\n## 技術的な注意点\n\n- レスポンスは camelCase（createdAt, updatedAt, chartType, queryResult）に変換する\n\n## 依存関係\n\n- **前提（これが必要）**: task-4-1-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/api.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-4-2-1",
+    "parent_id": "pbi-4-2",
+    "title": "Task 4.2.1: サイドバー/履歴アイテムのUIコンポーネントを実装する",
+    "body": "# Task 4.2.1: サイドバー/履歴アイテムのUIコンポーネントを実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `frontend/src/components/Sidebar/Sidebar.tsx` / `HistoryItem.tsx` を実装\n- `useHistory` フックで `GET /api/history` を購読\n- 更新日時降順で一覧表示\n- クリックで選択中の conversation をチャットエリアに復元\n\n## 完了条件\n\n- [ ] サイドバーに会話一覧が表示される\n- [ ] アイテムクリックでチャットエリアが復元表示される\n- [ ] 新規会話ボタンで空のチャットエリアに遷移する\n\n## 技術的な注意点\n\n- 復元時はメッセージの順序・sql/chart_type/result を正しく反映\n- Context7 で React Query の導入有無を検討（最小限ならuseEffect+fetchでも可）\n\n## 依存関係\n\n- **前提（これが必要）**: task-4-1-3, task-3-2-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/screens.md\n- .claude/rules/context7.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-4-2-2",
+    "parent_id": "pbi-4-2",
+    "title": "Task 4.2.2: 会話削除API(DELETE /api/history/:id)とUI操作を実装する",
+    "body": "# Task 4.2.2: 会話削除API(DELETE /api/history/:id)とUI操作を実装する\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- Backend: `DELETE /api/history/:id` を追加（存在しない時 404、成功時 204）\n- Frontend: `HistoryItem` に削除ボタン、確認ダイアログ、削除成功で一覧更新\n- 選択中の会話を削除した場合は空のチャットエリアに戻す\n\n## 完了条件\n\n- [ ] `DELETE /api/history/:id` が 204 / 404 を返す\n- [ ] UIから削除できる\n- [ ] 選択中の会話削除後は空状態に戻る\n\n## 技術的な注意点\n\n- 削除確認ダイアログはブラウザ `confirm()` で十分（MVP）\n\n## 依存関係\n\n- **前提（これが必要）**: task-4-2-1\n- **ブロッカー**: なし\n\n## 参考資料\n\n- ai_generated/requirements/api.md\n",
+    "labels": [
+      "task"
+    ]
+  },
+  {
+    "type": "task",
+    "id": "task-4-2-3",
+    "parent_id": "pbi-4-2",
+    "title": "Task 4.2.3: 履歴E2Eテストを追加する（一覧→選択→削除）",
+    "body": "# Task 4.2.3: 履歴E2Eテストを追加する（一覧→選択→削除）\n\n## 親PBI\n\n（Issue登録後にTasklistで設定）\n\n## 作業内容\n\n- `test/e2e/history.spec.ts` を作成\n- バックエンドを動作させ、事前にチャットを1-2件行った状態で:\n  - 一覧に表示されること\n  - 選択でチャット復元されること\n  - 削除で一覧から消えることを検証\n\n## 完了条件\n\n- [ ] E2Eが通る\n- [ ] skills/test-standards 準拠\n\n## 技術的な注意点\n\n- conversation/message のテストデータは fixtures で事前投入することも可\n\n## 依存関係\n\n- **前提（これが必要）**: task-4-2-2\n- **ブロッカー**: なし\n\n## 参考資料\n\n- skills/test-standards\n",
+    "labels": [
+      "task"
+    ]
+  }
+]

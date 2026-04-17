@@ -1,0 +1,335 @@
+openapi: 3.0.3
+info:
+  title: DataAgent API
+  description: 自然言語データ分析システムのバックエンドAPI
+  version: 1.0.0
+  contact:
+    name: DataAgent Team
+
+servers:
+  - url: http://localhost:3002
+    description: ローカル開発環境
+  - url: http://okegawaatclink-gaido-dataagent-output-system-backend:3002
+    description: Docker環境
+
+paths:
+  /api/chat:
+    post:
+      summary: チャットメッセージ送信
+      description: |
+        自然言語の質問を送信し、SQL生成・実行・結果をストリーミングで返却。
+        Server-Sent Events (SSE) でレスポンスを返す。
+
+        ストリーミングイベント:
+        - conversation: 会話ID通知
+        - message: テキスト応答のチャンク（ストリーミング）
+        - sql: 生成されたSQL
+        - chart_type: 推奨グラフ種類（bar/line/pie/table）
+        - result: クエリ結果JSON
+        - analysis: AI分析コメントのチャンク（ストリーミング）
+        - error: エラー発生時
+        - done: ストリーム終了
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  description: ユーザーの自然言語質問
+                  example: "今月の売上トップ10を教えて"
+                conversationId:
+                  type: string
+                  format: uuid
+                  description: 会話ID（既存会話の続きの場合）
+                  example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: SSEストリーム
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "message is required"
+        "500":
+          description: サーバーエラー
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Internal server error"
+
+  /api/history:
+    get:
+      summary: 会話履歴一覧取得
+      description: 全ての会話履歴を作成日時の降順で取得
+      responses:
+        "200":
+          description: 会話一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                      example: "550e8400-e29b-41d4-a716-446655440000"
+                    title:
+                      type: string
+                      description: 会話タイトル（最初の質問から自動生成）
+                      example: "今月の売上トップ10について"
+                    created_at:
+                      type: string
+                      format: date-time
+                      example: "2026-04-17T10:30:00Z"
+                    updated_at:
+                      type: string
+                      format: date-time
+                      example: "2026-04-17T10:35:00Z"
+        "500":
+          description: サーバーエラー
+
+  /api/history/{id}:
+    get:
+      summary: 特定の会話詳細を取得
+      description: 指定されたIDの会話と、その会話内の全メッセージを取得
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: 会話ID
+      responses:
+        "200":
+          description: 会話詳細
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversation:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      title:
+                        type: string
+                      created_at:
+                        type: string
+                        format: date-time
+                      updated_at:
+                        type: string
+                        format: date-time
+                  messages:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        role:
+                          type: string
+                          enum: [user, assistant]
+                          description: "user = ユーザーのメッセージ、assistant = AIの応答"
+                        content:
+                          type: string
+                          description: メッセージ内容
+                        sql:
+                          type: string
+                          nullable: true
+                          description: "生成されたSQL（assistantの場合のみ）"
+                        chart_type:
+                          type: string
+                          nullable: true
+                          enum: [bar, line, pie, table]
+                          description: "グラフ種類（assistantの場合のみ）"
+                        query_result:
+                          type: object
+                          nullable: true
+                          description: "クエリ結果JSON（assistantの場合のみ）"
+                        error:
+                          type: string
+                          nullable: true
+                          description: "エラー内容（エラー時のみ）"
+                        analysis:
+                          type: string
+                          nullable: true
+                          description: "AI分析コメント（assistantの場合のみ）"
+                        created_at:
+                          type: string
+                          format: date-time
+        "404":
+          description: 会話が見つからない
+        "500":
+          description: サーバーエラー
+
+    delete:
+      summary: 会話を削除
+      description: 指定されたIDの会話と、その会話内の全メッセージを削除
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: 会話ID
+      responses:
+        "200":
+          description: 削除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "404":
+          description: 会話が見つからない
+        "500":
+          description: サーバーエラー
+
+  /api/schema:
+    get:
+      summary: 接続先DBのスキーマ情報を取得
+      description: |
+        接続先データベースのテーブル・カラム情報（テーブルコメント・カラムコメント含む）を取得。
+        LLMがSQLを生成する際のコンテキストとして使用される。
+      responses:
+        "200":
+          description: スキーマ情報
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tables:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        table_name:
+                          type: string
+                          description: テーブル名
+                          example: "sales"
+                        table_comment:
+                          type: string
+                          nullable: true
+                          description: テーブルのコメント
+                          example: "売上テーブル"
+                        columns:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              column_name:
+                                type: string
+                                description: カラム名
+                                example: "sale_id"
+                              data_type:
+                                type: string
+                                description: データ型
+                                example: "BIGINT"
+                              column_comment:
+                                type: string
+                                nullable: true
+                                description: カラムのコメント
+                                example: "売上ID"
+                              is_nullable:
+                                type: boolean
+                                description: NULLを許可するか
+                                example: false
+                              key:
+                                type: string
+                                nullable: true
+                                enum: [PRI, UNI, MUL]
+                                description: "キー情報（PRI=主キー、UNI=UNIQUE、MUL=複合キー）"
+        "500":
+          description: サーバーエラー
+
+components:
+  schemas:
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversation_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        sql:
+          type: string
+          nullable: true
+        chart_type:
+          type: string
+          nullable: true
+          enum: [bar, line, pie, table]
+        query_result:
+          type: object
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        analysis:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    Conversation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+tags:
+  - name: Chat
+    description: チャット機能
+  - name: History
+    description: 会話履歴管理
+  - name: Schema
+    description: データベーススキーマ情報
+
+externalDocs:
+  description: DataAgent ドキュメント
+  url: "https://github.com/xxx/yyy"

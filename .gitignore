@@ -1,3 +1,4 @@
 .box/
 .pockode/
 gaido_progress.json
+.playwright-cli/
