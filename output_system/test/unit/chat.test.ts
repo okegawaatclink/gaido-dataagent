@@ -818,9 +818,10 @@ describe('POST /api/chat', () => {
     const events = parseSseEvents(text)
 
     // Assert: conversation イベントが存在すること
+    // フィールド名は conversationId（フロントエンドの useChat と一致させるため id → conversationId に修正）
     const convEvent = events.find((e) => e.event === 'conversation')
     expect(convEvent).toBeDefined()
-    expect((convEvent!.data as { id: string }).id).toBeTruthy()
+    expect((convEvent!.data as { conversationId: string }).conversationId).toBeTruthy()
 
     // createConversation が呼ばれたこと
     expect(vi.mocked(createConversation)).toHaveBeenCalledTimes(1)

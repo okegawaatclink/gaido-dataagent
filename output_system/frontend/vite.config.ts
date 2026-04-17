@@ -60,6 +60,15 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       port: 3001,
       strictPort: true,
+      // プロキシ設定: /api/* をバックエンド（Express, port 3002）に転送する
+      // これにより VITE_API_BASE_URL を設定しなくても相対パスで API 呼び出しが可能
+      // 同一コンテナ内では localhost でバックエンドにアクセスできる
+      proxy: {
+        '/api': {
+          target: `http://localhost:${env.BACKEND_PORT || '3002'}`,
+          changeOrigin: true,
+        },
+      },
     },
   }
 })

@@ -9,14 +9,17 @@
  * - SSEイベント種別に応じて React state を更新
  * - 最後のアシスタントメッセージを逐次更新（immer不使用、React標準setState）
  * - AbortController でストリームのキャンセルに対応（コンポーネントアンマウント時）
+ * - conversationId を管理し、継続会話のリクエストに含める（PBI #13 Epic 4）
+ * - 履歴復元は restoreConversation() ラッパー経由で行い、内部 setState を外部に公開しない
  *
  * SSEイベント仕様（api.md / chat.ts 準拠）:
- *   event: message   - テキストチャンク（chunk プロパティ）
- *   event: sql       - 生成SQL（sql プロパティ）
- *   event: chart_type - グラフ種類（chartType プロパティ）
- *   event: result    - クエリ結果（columns / rows / chartType プロパティ）
- *   event: error     - エラーメッセージ（message プロパティ）
- *   event: done      - ストリーム終了（データなし）
+ *   event: message      - テキストチャンク（chunk プロパティ）
+ *   event: sql          - 生成SQL（sql プロパティ）
+ *   event: chart_type   - グラフ種類（chartType プロパティ）
+ *   event: result       - クエリ結果（columns / rows / chartType プロパティ）
+ *   event: error        - エラーメッセージ（message プロパティ）
+ *   event: done         - ストリーム終了（データなし）
+ *   event: conversation - 会話ID通知（conversationId プロパティ）※PBI #13 追加
  */
 
 import { useState, useCallback, useRef } from 'react'
@@ -112,14 +115,22 @@ function createAssistantMessage(): ChatMessage {
  * 返り値:
  * - messages: 現在の会話のメッセージ一覧（ユーザー + アシスタント交互）
  * - isLoading: LLMの応答待ち中かどうか（送信後〜done受信まで true）
+ * - conversationId: 現在の会話ID（バックエンドから SSE conversation イベントで受け取る）
  * - send: 質問を送信する非同期関数
- * - clearMessages: 会話をリセットする関数
+ * - clearMessages: 会話をリセットする関数（conversationId もリセット）
+ * - restoreConversation: 履歴から会話を復元するラッパー関数（messages と conversationId を一括設定）
+ *
+ * 設計原則:
+ * - React 内部型（React.Dispatch）は公開インターフェースに露出させない
+ * - 外部から状態を変更する場合は意図が明確なラッパー関数を通じて行う
  */
 export function useChat(): UseChatReturn {
   // 会話内のメッセージ一覧
   const [messages, setMessages] = useState<ChatMessage[]>([])
   // ローディング状態（ストリーミング受信中は true）
   const [isLoading, setIsLoading] = useState(false)
+  // 現在の会話ID（バックエンドから受け取る。新規会話時は null）
+  const [conversationId, setConversationId] = useState<string | null>(null)
   // AbortController の ref（コンポーネントアンマウント時にストリームをキャンセルするため）
   const abortControllerRef = useRef<AbortController | null>(null)
 
@@ -148,7 +159,8 @@ export function useChat(): UseChatReturn {
    * 1. ユーザーメッセージを messages に追加
    * 2. アシスタントメッセージ（空）を追加してストリーミング開始
    * 3. SSEイベントを受信して逐次 state を更新
-   * 4. done イベントまたはエラーで isLoading を false に
+   * 4. conversation イベントで conversationId を受け取る（PBI #13）
+   * 5. done イベントまたはエラーで isLoading を false に
    *
    * @param message - ユーザーが入力した質問テキスト
    */
@@ -179,9 +191,19 @@ export function useChat(): UseChatReturn {
 
       try {
         // SSEストリームを購読
+        // conversationId が存在する場合はリクエストボディに含めて継続会話を示す
+        const requestBody: Record<string, unknown> = { message: trimmed }
+        // 現在の conversationId を閉じ込めるため、送信前に変数に取得する
+        // （useState の値は非同期で古くなる場合があるため、ref を使う方が安全だが、
+        //   SSE で conversationId を受け取るまで変化しないため useState で十分）
+        const currentConversationId = conversationId
+        if (currentConversationId) {
+          requestBody.conversationId = currentConversationId
+        }
+
         const generator = streamSseEvents(
           CHAT_API_URL,
-          { message: trimmed },
+          requestBody,
           abortController.signal,
         )
 
@@ -256,6 +278,16 @@ export function useChat(): UseChatReturn {
               break
             }
 
+            case 'conversation': {
+              // バックエンドから会話IDを受け取る（PBI #13 Epic 4 追加）
+              // この conversation イベントにより、フロントエンドが conversationId を知る
+              const data = sseEvent.data as { conversationId: string }
+              if (data.conversationId) {
+                setConversationId(data.conversationId)
+              }
+              break
+            }
+
             case 'done': {
               // ストリーム終了: isStreaming を false にして完了
               updateAssistantMessage(assistantMessageId, (prev) => ({
@@ -295,12 +327,15 @@ export function useChat(): UseChatReturn {
         }
       }
     },
-    [updateAssistantMessage],
+    [conversationId, updateAssistantMessage],
   )
 
   /**
    * 会話をリセットする
-   * 送信中のリクエストがある場合はキャンセルしてからリセットする
+   *
+   * 送信中のリクエストがある場合はキャンセルしてからリセットする。
+   * conversationId もリセットして新規会話状態に戻す（PBI #13 追加）。
+   * 履歴は削除しない（履歴はサイドバーから参照可能）。
    */
   const clearMessages = useCallback(() => {
     // 進行中のリクエストをキャンセル
@@ -310,12 +345,34 @@ export function useChat(): UseChatReturn {
     }
     setMessages([])
     setIsLoading(false)
+    // conversationId をリセット（新しい会話として扱う）
+    setConversationId(null)
   }, [])
+
+  /**
+   * 履歴から会話を復元するラッパー関数
+   *
+   * React.Dispatch 型を直接公開する代わりに、履歴復元という操作の意図を
+   * 明確に表現した専用ラッパーを提供する。
+   * これにより、useChat の内部状態管理の実装詳細（setState）を外部に漏洩させない。
+   *
+   * @param id       - 復元する会話のID
+   * @param loadedMessages - 復元するメッセージ一覧（GET /api/history/:id のレスポンス）
+   */
+  const restoreConversation = useCallback(
+    (id: string, loadedMessages: ChatMessage[]) => {
+      setMessages(loadedMessages)
+      setConversationId(id)
+    },
+    [],
+  )
 
   return {
     messages,
     isLoading,
+    conversationId,
     send,
     clearMessages,
+    restoreConversation,
   }
 }

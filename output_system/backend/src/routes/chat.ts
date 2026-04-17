@@ -23,7 +23,7 @@
  */
 
 import { Router, Request, Response } from 'express'
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import { v4 as uuidv4, validate as uuidValidate } from 'uuid'
 import { fetchSchema } from '../services/schema'
 import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError } from '../services/llm'
@@ -59,12 +59,14 @@ const chatRateLimiter = rateLimit({
     error: 'リクエスト数が制限を超えました。しばらく待ってから再試行してください。',
   },
   keyGenerator: (req) => {
-    // X-Forwarded-For が信頼できるプロキシから来る場合はそちらを使用
-    const forwarded = req.headers['x-forwarded-for']
-    if (typeof forwarded === 'string') {
-      return forwarded.split(',')[0].trim()
-    }
-    return req.ip ?? 'unknown'
+    // X-Forwarded-For は任意の値に偽装可能（IPスプーフィングによるレートリミット回避リスク）。
+    // このサービスはリバースプロキシを経由しない直接公開構成のため、
+    // 直接接続 IP（req.socket.remoteAddress）のみを信頼する。
+    // ipKeyGenerator を使用して IPv6 アドレスを /56 サブネット単位に正規化する
+    //（IPv6 ユーザーが異なるアドレスで回避するのを防ぐ）。
+    // リバースプロキシ導入時は index.ts で app.set('trust proxy', 1) を設定し、
+    // keyGenerator: (req) => ipKeyGenerator(req.ip ?? '') に切り替えること。
+    return ipKeyGenerator(req.socket.remoteAddress ?? 'unknown')
   },
 })
 
@@ -199,13 +201,14 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
         const conv = createConversation(historyDb, { id: validatedConversationId, title })
         activeConversationId = conv.id
         // SSE で conversationId をクライアントに通知
-        sendSseEvent(res, 'conversation', { id: activeConversationId })
+        // フロントエンドの useChat が data.conversationId として参照するため、フィールド名を統一する
+        sendSseEvent(res, 'conversation', { conversationId: activeConversationId })
       } else {
         activeConversationId = existing.id
         // 既存会話の updated_at を更新
         updateConversationTimestamp(historyDb, activeConversationId)
         // SSE で conversationId をクライアントに通知
-        sendSseEvent(res, 'conversation', { id: activeConversationId })
+        sendSseEvent(res, 'conversation', { conversationId: activeConversationId })
       }
     } else {
       // 新規会話: ユーザー発話の先頭30文字をタイトルとして自動生成
@@ -213,7 +216,8 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
       const conv = createConversation(historyDb, { id: uuidv4(), title })
       activeConversationId = conv.id
       // SSE で conversationId をクライアントに通知（フロントエンドが次回以降に使用）
-      sendSseEvent(res, 'conversation', { id: activeConversationId })
+      // フィールド名は conversationId で統一する（フロントエンドの useChat 参照先と一致）
+      sendSseEvent(res, 'conversation', { conversationId: activeConversationId })
     }
 
     // user message を先にDB に保存（SSE ストリーム開始前）
