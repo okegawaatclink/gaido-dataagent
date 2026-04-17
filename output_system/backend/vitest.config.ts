@@ -12,6 +12,8 @@ export default defineConfig({
     env: {
       CHAT_RATE_LIMIT_MAX: '100000',
       CHAT_RATE_LIMIT_WINDOW: '1',
+      HISTORY_RATE_LIMIT_MAX: '100000',
+      HISTORY_RATE_LIMIT_WINDOW: '1',
     },
     coverage: {
       provider: 'v8',

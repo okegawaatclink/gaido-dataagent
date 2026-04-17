@@ -24,7 +24,7 @@
 
 import { Router, Request, Response } from 'express'
 import rateLimit from 'express-rate-limit'
-import { v4 as uuidv4 } from 'uuid'
+import { v4 as uuidv4, validate as uuidValidate } from 'uuid'
 import { fetchSchema } from '../services/schema'
 import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError } from '../services/llm'
 import { executeQuery, SqlValidationError } from '../services/database'
@@ -137,6 +137,12 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     return
   }
 
+  // conversationId の長さチェック（極端に長い文字列は先に弾く）
+  if (reqConversationId !== undefined && reqConversationId.length > 128) {
+    res.status(400).json({ error: 'conversationId は 128 文字以内で指定してください。' })
+    return
+  }
+
   // SSE レスポンスヘッダーを設定
   // Content-Type: text/event-stream が SSE の必須ヘッダー
   res.setHeader('Content-Type', 'text/event-stream')
@@ -180,13 +186,17 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
   try {
     const historyDb = getHistoryDb()
 
-    if (reqConversationId) {
+    // UUID v4 形式バリデーション: 無効な conversationId は無視して新規会話として扱う
+    const validatedConversationId =
+      reqConversationId && uuidValidate(reqConversationId) ? reqConversationId : undefined
+
+    if (validatedConversationId) {
       // 既存会話: DB に存在するか確認（存在しない場合は新規作成にフォールバック）
-      const existing = getConversationById(historyDb, reqConversationId)
+      const existing = getConversationById(historyDb, validatedConversationId)
       if (!existing) {
         // 指定IDが存在しない場合は新規会話として作成
         const title = message.trim().slice(0, 30)
-        const conv = createConversation(historyDb, { id: reqConversationId, title })
+        const conv = createConversation(historyDb, { id: validatedConversationId, title })
         activeConversationId = conv.id
         // SSE で conversationId をクライアントに通知
         sendSseEvent(res, 'conversation', { id: activeConversationId })

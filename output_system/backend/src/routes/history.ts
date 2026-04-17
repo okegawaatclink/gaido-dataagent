@@ -19,6 +19,8 @@
  */
 
 import { Router, Request, Response } from 'express'
+import rateLimit from 'express-rate-limit'
+import { validate as uuidValidate } from 'uuid'
 import {
   getHistoryDb,
   listConversations,
@@ -30,6 +32,32 @@ import {
 } from '../services/historyDb'
 
 const router = Router()
+
+/**
+ * GET/DELETE /api/history レートリミット設定
+ *
+ * 大量の履歴取得・削除リクエストを防ぐ。
+ * デフォルト: 60リクエスト/分/IP
+ * 環境変数で上書き可能:
+ *   HISTORY_RATE_LIMIT_MAX    - 最大リクエスト数（デフォルト: 60）
+ *   HISTORY_RATE_LIMIT_WINDOW - ウィンドウ秒数（デフォルト: 60）
+ */
+const historyRateLimiter = rateLimit({
+  windowMs: parseInt(process.env.HISTORY_RATE_LIMIT_WINDOW || '60', 10) * 1000,
+  max: parseInt(process.env.HISTORY_RATE_LIMIT_MAX || '60', 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'リクエスト数が制限を超えました。しばらく待ってから再試行してください。',
+  },
+  keyGenerator: (req) => {
+    const forwarded = req.headers['x-forwarded-for']
+    if (typeof forwarded === 'string') {
+      return forwarded.split(',')[0].trim()
+    }
+    return req.ip ?? 'unknown'
+  },
+})
 
 // ---------------------------------------------------------------------------
 // レスポンス型（camelCase）
@@ -142,7 +170,7 @@ function toMessageResponse(row: MessageRow): MessageResponse {
  * @returns 200 - ConversationSummary の配列
  * @returns 500 - サーバーエラー
  */
-router.get('/', (_req: Request, res: Response): void => {
+router.get('/', historyRateLimiter, (_req: Request, res: Response): void => {
   try {
     const db = getHistoryDb()
     const rows = listConversations(db)
@@ -182,8 +210,14 @@ router.get('/', (_req: Request, res: Response): void => {
  * @returns 404 - 会話が存在しない場合
  * @returns 500 - サーバーエラー
  */
-router.get('/:id', (req: Request, res: Response): void => {
+router.get('/:id', historyRateLimiter, (req: Request, res: Response): void => {
   const id = req.params['id'] as string
+
+  // UUID v4 形式バリデーション（非UUIDは 400 を返す）
+  if (!uuidValidate(id)) {
+    res.status(400).json({ error: '無効なIDです。UUID v4 形式で指定してください。' })
+    return
+  }
 
   try {
     const db = getHistoryDb()
@@ -205,7 +239,8 @@ router.get('/:id', (req: Request, res: Response): void => {
 
     res.json(detail)
   } catch (err) {
-    console.error(`[history] GET /api/history/${id} error:`, err)
+    // ログインジェクション対策: ユーザー入力 id を直接文字列に埋め込まず構造化ログを使用
+    console.error('[history] GET /api/history/:id error:', { id: JSON.stringify(id), err })
     res.status(500).json({ error: '会話詳細の取得に失敗しました。' })
   }
 })
@@ -224,8 +259,14 @@ router.get('/:id', (req: Request, res: Response): void => {
  * @returns 404 - 会話が存在しない場合
  * @returns 500 - サーバーエラー
  */
-router.delete('/:id', (req: Request, res: Response): void => {
+router.delete('/:id', historyRateLimiter, (req: Request, res: Response): void => {
   const id = req.params['id'] as string
+
+  // UUID v4 形式バリデーション（非UUIDは 400 を返す）
+  if (!uuidValidate(id)) {
+    res.status(400).json({ error: '無効なIDです。UUID v4 形式で指定してください。' })
+    return
+  }
 
   try {
     const db = getHistoryDb()
@@ -242,7 +283,8 @@ router.delete('/:id', (req: Request, res: Response): void => {
     // 204 No Content（削除成功・ボディなし）
     res.status(204).end()
   } catch (err) {
-    console.error(`[history] DELETE /api/history/${id} error:`, err)
+    // ログインジェクション対策: ユーザー入力 id を直接文字列に埋め込まず構造化ログを使用
+    console.error('[history] DELETE /api/history/:id error:', { id: JSON.stringify(id), err })
     res.status(500).json({ error: '会話の削除に失敗しました。' })
   }
 })
