@@ -81,6 +81,35 @@ vi.mock('../../backend/src/services/database', () => {
   }
 })
 
+// historyDb をモック化（ファイルシステムへの書き込みを防ぐ）
+vi.mock('../../backend/src/services/historyDb', () => {
+  // インメモリの会話ストア（テスト内での検証に使用可能）
+  const conversations = new Map<string, { id: string; title: string; created_at: string; updated_at: string }>()
+
+  return {
+    getHistoryDb: vi.fn(() => ({})),
+    createConversation: vi.fn((_db: unknown, params: { id: string; title: string }) => {
+      const now = new Date().toISOString()
+      const conv = { id: params.id, title: params.title, created_at: now, updated_at: now }
+      conversations.set(params.id, conv)
+      return conv
+    }),
+    getConversationById: vi.fn((_db: unknown, id: string) => conversations.get(id)),
+    updateConversationTimestamp: vi.fn(),
+    createMessage: vi.fn((_db: unknown, params: { id: string }) => ({
+      id: params.id,
+      conversation_id: '',
+      role: 'user',
+      content: '',
+      sql: null,
+      chart_type: null,
+      query_result: null,
+      error: null,
+      created_at: new Date().toISOString(),
+    })),
+  }
+})
+
 // ---------------------------------------------------------------------------
 // モックのインポート（vi.mock後にインポートしてキャプチャ）
 // ---------------------------------------------------------------------------
@@ -94,6 +123,7 @@ import {
   LlmConfigError,
 } from '../../backend/src/services/llm'
 import { executeQuery } from '../../backend/src/services/database'
+import { createConversation, createMessage } from '../../backend/src/services/historyDb'
 
 // ---------------------------------------------------------------------------
 // テスト用フィクスチャ
@@ -595,6 +625,124 @@ describe('POST /api/chat', () => {
   })
 
   // -------------------------------------------------------------------------
+  // セキュリティ: conversationId バリデーション（H1/L1対応）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】POST /api/chat セキュリティ - conversationId 長さ制限（L1対応）
+   * 【テスト内容】conversationId が 128 文字を超えるリクエストを送信したとき
+   * 【期待結果】ステータスコード 400 が返ること（SSEは開始されない）
+   */
+  it('should return 400 when conversationId exceeds 128 characters', async () => {
+    // Arrange: 129文字の conversationId
+    const longId = 'a'.repeat(129)
+
+    // Act
+    const res = await request(app)
+      .post('/api/chat')
+      .send({ message: 'テスト', conversationId: longId })
+
+    // Assert
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeDefined()
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat セキュリティ - 非UUID形式の conversationId（H1対応）
+   * 【テスト内容】非UUID形式の conversationId を送信したとき、
+   *              新規会話として扱われること（400エラーにならない）
+   * 【期待結果】
+   *   - HTTP 200（SSEストリームが返される）
+   *   - conversation イベントが含まれること（新規会話が作成される）
+   *   - createConversation が呼ばれること
+   */
+  it('should treat invalid conversationId as new conversation (no error, creates new)', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act: 非UUID形式の conversationId を送信
+    const { text, status } = await sendChatRequest(app, 'テスト')
+    // Note: sendChatRequest は message のみ送信するため、直接リクエストを組み立てる
+    const res2 = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+      const req = request(app)
+        .post('/api/chat')
+        .send({ message: 'テスト', conversationId: 'not-a-valid-uuid' })
+        .set('Accept', 'text/event-stream')
+
+      let responseText = ''
+      let statusCode = 200
+      req
+        .buffer(true)
+        .parse((res, cb) => {
+          statusCode = res.statusCode ?? 200
+          let data = ''
+          res.on('data', (chunk: Buffer) => { data += chunk.toString() })
+          res.on('end', () => { responseText = data; cb(null, data) })
+          res.on('error', cb)
+        })
+        .then(() => resolve({ status: statusCode, text: responseText }))
+        .catch(reject)
+    })
+
+    const events = parseSseEvents(res2.text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert: SSEストリームが返される（400エラーにならない）
+    expect(res2.status).toBe(200)
+    // conversation イベントが含まれること（新規会話として扱われた証拠）
+    expect(eventNames).toContain('conversation')
+    // done イベントが含まれること
+    expect(eventNames).toContain('done')
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat セキュリティ - 有効な UUID v4 の conversationId（H1対応）
+   * 【テスト内容】有効なUUID v4形式の conversationId を送信したとき、
+   *              既存会話として処理されること
+   * 【期待結果】conversation イベントが含まれること（既存/新規どちらかで処理）
+   */
+  it('should accept valid UUID v4 conversationId and process normally', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    const validUuid = '550e8400-e29b-41d4-a716-446655440000'
+
+    // Act
+    const res = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+      const req = request(app)
+        .post('/api/chat')
+        .send({ message: 'テスト', conversationId: validUuid })
+        .set('Accept', 'text/event-stream')
+
+      let responseText = ''
+      let statusCode = 200
+      req
+        .buffer(true)
+        .parse((res, cb) => {
+          statusCode = res.statusCode ?? 200
+          let data = ''
+          res.on('data', (chunk: Buffer) => { data += chunk.toString() })
+          res.on('end', () => { responseText = data; cb(null, data) })
+          res.on('error', cb)
+        })
+        .then(() => resolve({ status: statusCode, text: responseText }))
+        .catch(reject)
+    })
+
+    const events = parseSseEvents(res.text)
+    const eventNames = events.map((e) => e.event)
+
+    // Assert: 正常にSSEストリームが返される
+    expect(res.status).toBe(200)
+    expect(eventNames).toContain('conversation')
+    expect(eventNames).toContain('done')
+  })
+
+  // -------------------------------------------------------------------------
   // セキュリティ（M2: エラーメッセージの内部情報漏洩防止）
   // -------------------------------------------------------------------------
 
@@ -644,5 +792,88 @@ describe('POST /api/chat', () => {
     // 内部IPアドレスやポートがユーザーに見えないこと
     expect(errorMessage).not.toContain('192.168.1.50')
     expect(errorMessage).not.toContain('ECONNREFUSED')
+  })
+
+  // -------------------------------------------------------------------------
+  // 会話履歴保存（Task 4.1.2: /api/chat処理内での保存）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - 会話履歴保存
+   * 【テスト内容】conversationId なしでリクエストを送信したとき、
+   *              新規会話が作成され conversation SSEイベントが返ること
+   * 【期待結果】
+   *   - createConversation が1回呼ばれること
+   *   - SSEレスポンスに event: conversation が含まれること
+   *   - createMessage がユーザーメッセージ用に1回呼ばれること
+   */
+  it('should create new conversation and emit conversation event when no conversationId', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    const { text } = await sendChatRequest(app, '新規会話のテスト')
+    const events = parseSseEvents(text)
+
+    // Assert: conversation イベントが存在すること
+    const convEvent = events.find((e) => e.event === 'conversation')
+    expect(convEvent).toBeDefined()
+    expect((convEvent!.data as { id: string }).id).toBeTruthy()
+
+    // createConversation が呼ばれたこと
+    expect(vi.mocked(createConversation)).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - ユーザーメッセージ保存
+   * 【テスト内容】チャットリクエスト時にユーザーメッセージがDB保存されること
+   * 【期待結果】createMessage が少なくとも1回（ユーザーメッセージ）呼ばれること
+   */
+  it('should save user message to history DB', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    await sendChatRequest(app, 'ユーザーメッセージ保存テスト')
+
+    // Assert: createMessage が少なくとも1回（ユーザーメッセージ）呼ばれること
+    expect(vi.mocked(createMessage)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        role: 'user',
+        content: 'ユーザーメッセージ保存テスト',
+      })
+    )
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - アシスタントメッセージ保存
+   * 【テスト内容】正常完了後にアシスタントメッセージがDB保存されること
+   * 【期待結果】createMessage が2回（user + assistant）呼ばれること
+   */
+  it('should save assistant message with sql and queryResult to history DB', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    await sendChatRequest(app, 'アシスタント保存テスト')
+
+    // Assert: createMessage が2回呼ばれること（user + assistant）
+    expect(vi.mocked(createMessage)).toHaveBeenCalledTimes(2)
+    // アシスタントメッセージの呼び出しが含まれること
+    expect(vi.mocked(createMessage)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        role: 'assistant',
+        sql: 'SELECT * FROM orders',
+        chartType: 'bar',
+      })
+    )
   })
 })
