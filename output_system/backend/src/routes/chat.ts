@@ -24,9 +24,17 @@
 
 import { Router, Request, Response } from 'express'
 import rateLimit from 'express-rate-limit'
+import { v4 as uuidv4 } from 'uuid'
 import { fetchSchema } from '../services/schema'
 import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError } from '../services/llm'
 import { executeQuery, SqlValidationError } from '../services/database'
+import {
+  getHistoryDb,
+  createConversation,
+  getConversationById,
+  updateConversationTimestamp,
+  createMessage,
+} from '../services/historyDb'
 
 const router = Router()
 
@@ -115,8 +123,8 @@ function sendSseEvent(res: Response, event: string, data: unknown): void {
  *   - 内部エラー詳細（DBホスト名等）はサーバーログにのみ記録し、レスポンスには含めない
  */
 router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<void> => {
-  // リクエストボディから message を取得
-  const { message } = req.body as { message?: string; conversationId?: string }
+  // リクエストボディから message と conversationId を取得
+  const { message, conversationId: reqConversationId } = req.body as { message?: string; conversationId?: string }
 
   // message のバリデーション（SSEヘッダー送信前に400で返す）
   if (!message || message.trim() === '') {
@@ -156,6 +164,60 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     }
   }
 
+  // -------------------------------------------------------------------------
+  // 会話・メッセージの永続化（best effort）
+  // -------------------------------------------------------------------------
+  // 履歴DB への書き込みはチャット体験に影響しないよう best effort で行う。
+  // 書き込み失敗時はエラーをログに記録するが、SSE ストリームは止めない。
+
+  /**
+   * 会話ID（SSE開始前に確定する）
+   * - リクエストに conversationId が含まれる場合: 既存会話を使用
+   * - 含まれない場合: 新規会話を作成し、UUID を割り当てる
+   */
+  let activeConversationId: string = reqConversationId ?? ''
+
+  try {
+    const historyDb = getHistoryDb()
+
+    if (reqConversationId) {
+      // 既存会話: DB に存在するか確認（存在しない場合は新規作成にフォールバック）
+      const existing = getConversationById(historyDb, reqConversationId)
+      if (!existing) {
+        // 指定IDが存在しない場合は新規会話として作成
+        const title = message.trim().slice(0, 30)
+        const conv = createConversation(historyDb, { id: reqConversationId, title })
+        activeConversationId = conv.id
+        // SSE で conversationId をクライアントに通知
+        sendSseEvent(res, 'conversation', { id: activeConversationId })
+      } else {
+        activeConversationId = existing.id
+        // 既存会話の updated_at を更新
+        updateConversationTimestamp(historyDb, activeConversationId)
+        // SSE で conversationId をクライアントに通知
+        sendSseEvent(res, 'conversation', { id: activeConversationId })
+      }
+    } else {
+      // 新規会話: ユーザー発話の先頭30文字をタイトルとして自動生成
+      const title = message.trim().slice(0, 30)
+      const conv = createConversation(historyDb, { id: uuidv4(), title })
+      activeConversationId = conv.id
+      // SSE で conversationId をクライアントに通知（フロントエンドが次回以降に使用）
+      sendSseEvent(res, 'conversation', { id: activeConversationId })
+    }
+
+    // user message を先にDB に保存（SSE ストリーム開始前）
+    createMessage(historyDb, {
+      id: uuidv4(),
+      conversationId: activeConversationId,
+      role: 'user',
+      content: message.trim(),
+    })
+  } catch (err) {
+    // 履歴DB 書き込みエラーはログに記録するが、ストリームは継続する
+    console.error('[chat] history DB write error (user message):', err)
+  }
+
   try {
     // -----------------------------------------------------------------------
     // Step 1: DBスキーマ取得
@@ -184,6 +246,9 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
           ? err.message
           : 'LLM サービスの初期化に失敗しました。'
       sendSseEvent(res, 'error', { message: userMessage })
+
+      // LLM 設定エラー時も assistant エラーメッセージを保存（best effort）
+      _saveAssistantMessage(activeConversationId, userMessage, null, null, null, userMessage)
       return
     }
 
@@ -192,6 +257,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     // -----------------------------------------------------------------------
     let extractedSql: string | null = null
     let extractedChartType: string | null = null
+    let fullAssistantText = ''
 
     try {
       const generator = llmService.generate({
@@ -202,7 +268,8 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
       for await (const event of generator) {
         switch (event.type) {
           case 'message':
-            // テキストチャンクを逐次送信
+            // テキストチャンクを逐次送信・累積（DBへの保存用）
+            fullAssistantText += event.chunk
             sendSseEvent(res, 'message', { chunk: event.chunk })
             break
 
@@ -238,6 +305,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
       }
 
       sendSseEvent(res, 'error', { message: userMessage })
+      _saveAssistantMessage(activeConversationId, fullAssistantText || userMessage, extractedSql, extractedChartType, null, userMessage)
       return
     }
 
@@ -246,7 +314,9 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     // -----------------------------------------------------------------------
     if (!extractedSql) {
       // SQL が生成されなかった場合（通常は LlmParseError が先にスローされるはず）
-      sendSseEvent(res, 'error', { message: 'LLM から SQL が生成されませんでした。' })
+      const errorMsg = 'LLM から SQL が生成されませんでした。'
+      sendSseEvent(res, 'error', { message: errorMsg })
+      _saveAssistantMessage(activeConversationId, fullAssistantText || errorMsg, null, extractedChartType, null, errorMsg)
       return
     }
 
@@ -261,6 +331,16 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
         rows: queryResult.rows,
         chartType: extractedChartType,
       })
+
+      // assistant メッセージをDB に保存（sql, chart_type, query_result 含む）
+      _saveAssistantMessage(
+        activeConversationId,
+        fullAssistantText,
+        extractedSql,
+        extractedChartType,
+        queryResult,
+        null
+      )
     } catch (err) {
       // SQL バリデーション失敗または実行エラー
       // 内部エラー詳細（DBホスト名等）はサーバーログに記録
@@ -272,6 +352,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
           : 'SQL の実行中にエラーが発生しました。'
 
       sendSseEvent(res, 'error', { message: userMessage })
+      _saveAssistantMessage(activeConversationId, fullAssistantText || userMessage, extractedSql, extractedChartType, null, userMessage)
     }
   } catch (err) {
     // 予期しないエラー（上記の try-catch を抜けてきた場合）
@@ -282,5 +363,49 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     finishStream()
   }
 })
+
+// ---------------------------------------------------------------------------
+// ヘルパー: assistant メッセージを best effort で保存
+// ---------------------------------------------------------------------------
+
+/**
+ * アシスタントメッセージを履歴DB に保存する（best effort）
+ *
+ * チャット体験を妨げないよう、エラー時はログに記録するだけで例外を伝播しない。
+ *
+ * @param conversationId - 保存先の会話ID
+ * @param content        - アシスタントの応答テキスト
+ * @param sql            - 生成されたSQL（nullable）
+ * @param chartType      - グラフ種別（nullable）
+ * @param queryResult    - クエリ実行結果（nullable）
+ * @param error          - エラーメッセージ（nullable）
+ */
+function _saveAssistantMessage(
+  conversationId: string,
+  content: string,
+  sql: string | null,
+  chartType: string | null,
+  queryResult: unknown,
+  error: string | null
+): void {
+  if (!conversationId) return
+
+  try {
+    const historyDb = getHistoryDb()
+    createMessage(historyDb, {
+      id: uuidv4(),
+      conversationId,
+      role: 'assistant',
+      content: content || '',
+      sql,
+      chartType,
+      queryResult,
+      error,
+    })
+  } catch (err) {
+    // 履歴DB 書き込みエラーはログに記録するが、ストリームには影響しない
+    console.error('[chat] history DB write error (assistant message):', err)
+  }
+}
 
 export default router

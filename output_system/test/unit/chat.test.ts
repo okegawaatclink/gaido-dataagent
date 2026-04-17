@@ -81,6 +81,35 @@ vi.mock('../../backend/src/services/database', () => {
   }
 })
 
+// historyDb をモック化（ファイルシステムへの書き込みを防ぐ）
+vi.mock('../../backend/src/services/historyDb', () => {
+  // インメモリの会話ストア（テスト内での検証に使用可能）
+  const conversations = new Map<string, { id: string; title: string; created_at: string; updated_at: string }>()
+
+  return {
+    getHistoryDb: vi.fn(() => ({})),
+    createConversation: vi.fn((_db: unknown, params: { id: string; title: string }) => {
+      const now = new Date().toISOString()
+      const conv = { id: params.id, title: params.title, created_at: now, updated_at: now }
+      conversations.set(params.id, conv)
+      return conv
+    }),
+    getConversationById: vi.fn((_db: unknown, id: string) => conversations.get(id)),
+    updateConversationTimestamp: vi.fn(),
+    createMessage: vi.fn((_db: unknown, params: { id: string }) => ({
+      id: params.id,
+      conversation_id: '',
+      role: 'user',
+      content: '',
+      sql: null,
+      chart_type: null,
+      query_result: null,
+      error: null,
+      created_at: new Date().toISOString(),
+    })),
+  }
+})
+
 // ---------------------------------------------------------------------------
 // モックのインポート（vi.mock後にインポートしてキャプチャ）
 // ---------------------------------------------------------------------------
@@ -94,6 +123,7 @@ import {
   LlmConfigError,
 } from '../../backend/src/services/llm'
 import { executeQuery } from '../../backend/src/services/database'
+import { createConversation, createMessage } from '../../backend/src/services/historyDb'
 
 // ---------------------------------------------------------------------------
 // テスト用フィクスチャ
@@ -644,5 +674,88 @@ describe('POST /api/chat', () => {
     // 内部IPアドレスやポートがユーザーに見えないこと
     expect(errorMessage).not.toContain('192.168.1.50')
     expect(errorMessage).not.toContain('ECONNREFUSED')
+  })
+
+  // -------------------------------------------------------------------------
+  // 会話履歴保存（Task 4.1.2: /api/chat処理内での保存）
+  // -------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - 会話履歴保存
+   * 【テスト内容】conversationId なしでリクエストを送信したとき、
+   *              新規会話が作成され conversation SSEイベントが返ること
+   * 【期待結果】
+   *   - createConversation が1回呼ばれること
+   *   - SSEレスポンスに event: conversation が含まれること
+   *   - createMessage がユーザーメッセージ用に1回呼ばれること
+   */
+  it('should create new conversation and emit conversation event when no conversationId', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    const { text } = await sendChatRequest(app, '新規会話のテスト')
+    const events = parseSseEvents(text)
+
+    // Assert: conversation イベントが存在すること
+    const convEvent = events.find((e) => e.event === 'conversation')
+    expect(convEvent).toBeDefined()
+    expect((convEvent!.data as { id: string }).id).toBeTruthy()
+
+    // createConversation が呼ばれたこと
+    expect(vi.mocked(createConversation)).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - ユーザーメッセージ保存
+   * 【テスト内容】チャットリクエスト時にユーザーメッセージがDB保存されること
+   * 【期待結果】createMessage が少なくとも1回（ユーザーメッセージ）呼ばれること
+   */
+  it('should save user message to history DB', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    await sendChatRequest(app, 'ユーザーメッセージ保存テスト')
+
+    // Assert: createMessage が少なくとも1回（ユーザーメッセージ）呼ばれること
+    expect(vi.mocked(createMessage)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        role: 'user',
+        content: 'ユーザーメッセージ保存テスト',
+      })
+    )
+  })
+
+  /**
+   * 【テスト対象】POST /api/chat 正常フロー - アシスタントメッセージ保存
+   * 【テスト内容】正常完了後にアシスタントメッセージがDB保存されること
+   * 【期待結果】createMessage が2回（user + assistant）呼ばれること
+   */
+  it('should save assistant message with sql and queryResult to history DB', async () => {
+    // Arrange
+    vi.mocked(fetchSchema).mockResolvedValue(mockSchema as never)
+    setupNormalLlmMock('SELECT * FROM orders', 'bar')
+    vi.mocked(executeQuery).mockResolvedValue(mockQueryResult as never)
+
+    // Act
+    await sendChatRequest(app, 'アシスタント保存テスト')
+
+    // Assert: createMessage が2回呼ばれること（user + assistant）
+    expect(vi.mocked(createMessage)).toHaveBeenCalledTimes(2)
+    // アシスタントメッセージの呼び出しが含まれること
+    expect(vi.mocked(createMessage)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        role: 'assistant',
+        sql: 'SELECT * FROM orders',
+        chartType: 'bar',
+      })
+    )
   })
 })
