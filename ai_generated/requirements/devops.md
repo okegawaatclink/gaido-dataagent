@@ -2,27 +2,35 @@
 
 ## デプロイ構成
 
-Docker Composeで web（フロントエンド+バックエンド） + MySQL + phpMyAdmin を一括起動する構成。
+Docker Composeで web（フロントエンド+バックエンド） + MySQL + phpMyAdmin を一括起動する構成。今回の改修で構成変更なし。
 
 ## 環境変数
 
 `.env` ファイルで以下を設定:
 
-| 変数名 | 説明 | 例 |
-|--------|------|-----|
-| ANTHROPIC_API_KEY | Claude APIキー | sk-ant-... |
-| ANTHROPIC_MODEL | 使用するClaude モデル名（省略時: claude-sonnet-4-20250514） | claude-sonnet-4-20250514 |
-| DB_TYPE | データベース種類 | mysql |
-| DB_HOST | DBホスト（コンテナ名） | okegawaatclink-gaido-dataagent-mysql |
-| DB_PORT | DBポート | 3306 |
-| DB_USER | DBユーザー名（リードオンリー） | readonly_user |
-| DB_PASSWORD | DBパスワード | ******* |
-| DB_NAME | データベース名 | sampledb |
-| MYSQL_ROOT_PASSWORD | MySQLのrootパスワード | rootpassword |
-| MYSQL_PORT | MySQLの外部公開ポート | 3306 |
-| PHPMYADMIN_PORT | phpMyAdminのポート | 8080 |
-| BACKEND_PORT | バックエンドポート | 3002 |
-| FRONTEND_PORT | フロントエンドポート | 3001 |
+| 変数名 | 説明 | 例 | 変更 |
+|--------|------|-----|------|
+| ANTHROPIC_API_KEY | Claude APIキー | sk-ant-... | 変更なし |
+| ANTHROPIC_MODEL | 使用するClaude モデル名（省略時: claude-sonnet-4-20250514） | claude-sonnet-4-20250514 | 変更なし |
+| DB_ENCRYPTION_KEY | DB接続先パスワード暗号化キー（32バイト hex文字列） | a1b2c3...（64文字） | **新規追加** |
+| MYSQL_ROOT_PASSWORD | MySQLのrootパスワード | rootpassword | 変更なし |
+| MYSQL_PORT | MySQLの外部公開ポート | 3306 | 変更なし |
+| PHPMYADMIN_PORT | phpMyAdminのポート | 8080 | 変更なし |
+| BACKEND_PORT | バックエンドポート | 3002 | 変更なし |
+| FRONTEND_PORT | フロントエンドポート | 3001 | 変更なし |
+
+### 廃止された環境変数
+
+以下の環境変数は今回の改修で廃止。DB接続先は画面から登録する方式に変更。
+
+| 変数名 | 説明 | 理由 |
+|--------|------|------|
+| ~~DB_TYPE~~ | データベース種類 | 画面から登録に変更 |
+| ~~DB_HOST~~ | DBホスト | 画面から登録に変更 |
+| ~~DB_PORT~~ | DBポート | 画面から登録に変更 |
+| ~~DB_USER~~ | DBユーザー名 | 画面から登録に変更 |
+| ~~DB_PASSWORD~~ | DBパスワード | 画面から登録に変更 |
+| ~~DB_NAME~~ | データベース名 | 画面から登録に変更 |
 
 ## コマンド
 
@@ -68,7 +76,7 @@ services:
     env_file:
       - .env
     environment:
-      - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=<instance-config参��>
+      - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=<instance-config参照>
     depends_on:
       mysql:
         condition: service_healthy

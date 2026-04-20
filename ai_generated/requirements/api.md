@@ -2,13 +2,18 @@
 
 ## エンドポイント一覧
 
-| メソッド | パス | 説明 |
-|---------|------|------|
-| POST | /api/chat | 自然言語でクエリを送信し、SQL生成・実行・結果を取得（SSE） |
-| GET | /api/history | 会話履歴一覧を取得 |
-| GET | /api/history/:id | 特定の会話の詳細を取得 |
-| DELETE | /api/history/:id | 特定の会話を削除 |
-| GET | /api/schema | 接続先DBのスキーマ情報を取得 |
+| メソッド | パス | 説明 | 変更 |
+|---------|------|------|------|
+| POST | /api/chat | 自然言語でクエリを送信し、SQL生成・実行・結果を取得（SSE） | 変更（db_connection_id追加） |
+| GET | /api/history | 会話履歴一覧を取得 | 変更（db_connection_idフィルター追加） |
+| GET | /api/history/:id | 特定の会話の詳細を取得 | 変更なし |
+| DELETE | /api/history/:id | 特定の会話を削除 | 変更なし |
+| GET | /api/schema | 接続先DBのスキーマ情報を取得 | 変更（db_connection_id追加） |
+| GET | /api/connections | DB接続先一覧を取得 | **新規** |
+| POST | /api/connections | DB接続先を登録 | **新規** |
+| PUT | /api/connections/:id | DB接続先を更新 | **新規** |
+| DELETE | /api/connections/:id | DB接続先を削除（関連会話も削除） | **新規** |
+| POST | /api/connections/test | DB接続テスト | **新規** |
 
 ## OpenAPI定義
 
@@ -17,9 +22,118 @@ openapi: 3.0.3
 info:
   title: DataAgent API
   description: 自然言語データ分析システムのバックエンドAPI
-  version: 1.0.0
+  version: 2.0.0
 
 paths:
+  /api/connections:
+    get:
+      summary: DB接続先一覧取得
+      description: 登録済みのDB接続先を一覧取得。パスワードは返却しない
+      responses:
+        "200":
+          description: 接続先一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DbConnection"
+
+    post:
+      summary: DB接続先登録
+      description: 新しいDB接続先を登録する
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DbConnectionInput"
+      responses:
+        "201":
+          description: 登録成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbConnection"
+        "400":
+          description: バリデーションエラー
+        "409":
+          description: 接続名が重複
+
+  /api/connections/{id}:
+    put:
+      summary: DB接続先更新
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DbConnectionInput"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbConnection"
+        "404":
+          description: 接続先が見つからない
+
+    delete:
+      summary: DB接続先削除
+      description: DB接続先と関連する全会話・メッセージを削除する
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: 削除成功
+        "404":
+          description: 接続先が見つからない
+
+  /api/connections/test:
+    post:
+      summary: DB接続テスト
+      description: 指定された接続情報でDBに接続できるか確認する
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DbConnectionInput"
+      responses:
+        "200":
+          description: 接続成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        "400":
+          description: 接続失敗
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+
   /api/chat:
     post:
       summary: チャットメッセージ送信
@@ -34,6 +148,7 @@ paths:
               type: object
               required:
                 - message
+                - dbConnectionId
               properties:
                 message:
                   type: string
@@ -43,6 +158,10 @@ paths:
                   type: string
                   description: 会話ID（既存会話の続きの場合）
                   example: "550e8400-e29b-41d4-a716-446655440000"
+                dbConnectionId:
+                  type: string
+                  description: DB接続先ID
+                  example: "660e8400-e29b-41d4-a716-446655440001"
       responses:
         "200":
           description: SSEストリーム
@@ -60,7 +179,7 @@ paths:
                   - event: analysis (AI分析コメントのチャンク)
                   - event: error (エラー発生時)
                   - event: done (ストリーム終了)
-                  
+
                   会話コンテキスト: conversationId指定時、同一会話の過去メッセージ（直近10往復）を
                   LLMのmessages配列に含めて送信する。これにより直前のSQLに対する修正依頼に対応可能。
         "400":
@@ -71,7 +190,14 @@ paths:
   /api/history:
     get:
       summary: 会話履歴一覧取得
-      description: 全ての会話履歴を作成日時の降順で取得
+      description: 指定DB接続先の会話履歴を作成日時の降順で取得
+      parameters:
+        - name: dbConnectionId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: DB接続先IDでフィルター
       responses:
         "200":
           description: 会話一覧
@@ -114,6 +240,8 @@ paths:
                   id:
                     type: string
                   title:
+                    type: string
+                  dbConnectionId:
                     type: string
                   messages:
                     type: array
@@ -167,7 +295,14 @@ paths:
   /api/schema:
     get:
       summary: DBスキーマ情報取得
-      description: 接続先DBのテーブル・カラム情報を取得
+      description: 指定DB接続先のテーブル・カラム情報を取得
+      parameters:
+        - name: dbConnectionId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: DB接続先ID
       responses:
         "200":
           description: スキーマ情報
@@ -190,7 +325,7 @@ paths:
                         comment:
                           type: string
                           nullable: true
-                          description: テーブルコメント（MySQL TABLE_COMMENT / PostgreSQL obj_description）
+                          description: テーブルコメント
                         columns:
                           type: array
                           items:
@@ -205,7 +340,74 @@ paths:
                               comment:
                                 type: string
                                 nullable: true
-                                description: カラムコメント（MySQL COLUMN_COMMENT / PostgreSQL col_description）
+                                description: カラムコメント
+        "404":
+          description: DB接続先が見つからない
         "500":
           description: DB接続エラー
+
+components:
+  schemas:
+    DbConnection:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          description: 接続名
+        dbType:
+          type: string
+          enum: [mysql, postgresql]
+        host:
+          type: string
+        port:
+          type: integer
+        username:
+          type: string
+        databaseName:
+          type: string
+        isLastUsed:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    DbConnectionInput:
+      type: object
+      required:
+        - name
+        - dbType
+        - host
+        - port
+        - username
+        - password
+        - databaseName
+      properties:
+        name:
+          type: string
+          description: 接続名
+          example: "本番DB"
+        dbType:
+          type: string
+          enum: [mysql, postgresql]
+          example: "mysql"
+        host:
+          type: string
+          example: "db-server"
+        port:
+          type: integer
+          example: 3306
+        username:
+          type: string
+          example: "readonly_user"
+        password:
+          type: string
+          example: "password123"
+        databaseName:
+          type: string
+          example: "sampledb"
 ```
