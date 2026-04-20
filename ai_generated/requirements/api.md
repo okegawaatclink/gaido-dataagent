@@ -4,18 +4,11 @@
 
 | メソッド | パス | 説明 |
 |---------|------|------|
-| POST | /api/chat | 自然言語でクエリを送信し、SQL/GraphQL生成・実行・結果を取得（SSE） |
+| POST | /api/chat | 自然言語でクエリを送信し、SQL生成・実行・結果を取得（SSE） |
 | GET | /api/history | 会話履歴一覧を取得 |
 | GET | /api/history/:id | 特定の会話の詳細を取得 |
 | DELETE | /api/history/:id | 特定の会話を削除 |
 | GET | /api/schema | 接続先DBのスキーマ情報を取得 |
-| GET | /api/settings | 現在のデータソース設定を取得 |
-| PUT | /api/settings | データソース設定を更新 |
-| GET | /api/specs | 登録済みOpenAPI Spec一覧を取得 |
-| POST | /api/specs | OpenAPI Specを新規登録（URL指定またはファイルアップロード） |
-| GET | /api/specs/:id | 特定のOpenAPI Specの詳細を取得 |
-| DELETE | /api/specs/:id | OpenAPI Specを削除 |
-| GET | /api/specs/:id/schema | 指定Specから生成されたGraphQLスキーマを取得 |
 
 ## OpenAPI定義
 
@@ -24,16 +17,15 @@ openapi: 3.0.3
 info:
   title: DataAgent API
   description: 自然言語データ分析システムのバックエンドAPI
-  version: 2.0.0
+  version: 1.0.0
 
 paths:
   /api/chat:
     post:
       summary: チャットメッセージ送信
       description: |
-        自然言語の質問を送信し、SQL/GraphQL生成・実行・結果をストリーミングで返却。
+        自然言語の質問を送信し、SQL生成・実行・結果をストリーミングで返却。
         Server-Sent Events (SSE) でレスポンスを返す。
-        データソースの種類（DB/API）は会話に紐づく設定で自動判定。
       requestBody:
         required: true
         content:
@@ -62,16 +54,15 @@ paths:
                   以下のイベントが順番に送信される:
                   - event: conversation (会話ID通知)
                   - event: message (テキスト応答のチャンク)
-                  - event: sql (生成されたSQL - DBモード)
-                  - event: graphql (生成されたGraphQLクエリ - APIモード)
+                  - event: sql (生成されたSQL)
                   - event: chart_type (推奨グラフ種類)
                   - event: result (クエリ結果JSON)
-                  - event: analysis (AI分析コメントのチャンク - DBモードのみ)
+                  - event: analysis (AI分析コメントのチャンク)
                   - event: error (エラー発生時)
                   - event: done (ストリーム終了)
                   
                   会話コンテキスト: conversationId指定時、同一会話の過去メッセージ（直近10往復）を
-                  LLMのmessages配列に含めて送信する。これにより直前のクエリに対する修正依頼に対応可能。
+                  LLMのmessages配列に含めて送信する。これにより直前のSQLに対する修正依頼に対応可能。
         "400":
           description: リクエスト不正
         "500":
@@ -95,12 +86,6 @@ paths:
                       type: string
                     title:
                       type: string
-                    dataSourceType:
-                      type: string
-                      enum: [db, api]
-                    apiSpecName:
-                      type: string
-                      nullable: true
                     createdAt:
                       type: string
                       format: date-time
@@ -130,12 +115,6 @@ paths:
                     type: string
                   title:
                     type: string
-                  dataSourceType:
-                    type: string
-                    enum: [db, api]
-                  apiSpecId:
-                    type: string
-                    nullable: true
                   messages:
                     type: array
                     items:
@@ -151,9 +130,6 @@ paths:
                         sql:
                           type: string
                           nullable: true
-                        graphqlQuery:
-                          type: string
-                          nullable: true
                         chartType:
                           type: string
                           nullable: true
@@ -167,7 +143,7 @@ paths:
                         analysis:
                           type: string
                           nullable: true
-                          description: AI分析コメント（DBモードのみ）
+                          description: AI分析コメント
                         createdAt:
                           type: string
                           format: date-time
@@ -214,7 +190,7 @@ paths:
                         comment:
                           type: string
                           nullable: true
-                          description: テーブルコメント
+                          description: テーブルコメント（MySQL TABLE_COMMENT / PostgreSQL obj_description）
                         columns:
                           type: array
                           items:
@@ -229,174 +205,7 @@ paths:
                               comment:
                                 type: string
                                 nullable: true
+                                description: カラムコメント（MySQL COLUMN_COMMENT / PostgreSQL col_description）
         "500":
           description: DB接続エラー
-
-  /api/settings:
-    get:
-      summary: データソース設定取得
-      description: 現在のデータソース設定を取得
-      responses:
-        "200":
-          description: データソース設定
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  dataSourceType:
-                    type: string
-                    enum: [db, api]
-                  activeApiSpecId:
-                    type: string
-                    nullable: true
-
-    put:
-      summary: データソース設定更新
-      description: データソース設定を更新
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                dataSourceType:
-                  type: string
-                  enum: [db, api]
-                activeApiSpecId:
-                  type: string
-                  nullable: true
-      responses:
-        "200":
-          description: 更新成功
-        "400":
-          description: リクエスト不正
-
-  /api/specs:
-    get:
-      summary: OpenAPI Spec一覧取得
-      description: 登録済みのOpenAPI Spec一覧を取得
-      responses:
-        "200":
-          description: Spec一覧
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    name:
-                      type: string
-                    specUrl:
-                      type: string
-                      nullable: true
-                    status:
-                      type: string
-                      enum: [active, error]
-                    createdAt:
-                      type: string
-                      format: date-time
-
-    post:
-      summary: OpenAPI Spec登録
-      description: OpenAPI Specを新規登録（URL指定またはファイルアップロード）
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - name
-              properties:
-                name:
-                  type: string
-                  description: API名（表示用）
-                specUrl:
-                  type: string
-                  description: OpenAPI Spec URL（URL指定の場合）
-                specContent:
-                  type: string
-                  description: OpenAPI Spec内容（ファイルアップロードの場合、JSON/YAML文字列）
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-                - name
-                - file
-              properties:
-                name:
-                  type: string
-                file:
-                  type: string
-                  format: binary
-                  description: OpenAPI Specファイル（YAML/JSON）
-      responses:
-        "201":
-          description: 登録成功
-        "400":
-          description: Spec解析エラー（不正なOpenAPI形式等）
-
-  /api/specs/{id}:
-    get:
-      summary: OpenAPI Spec詳細取得
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Spec詳細
-        "404":
-          description: Specが見つからない
-
-    delete:
-      summary: OpenAPI Spec削除
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "204":
-          description: 削除成功
-        "404":
-          description: Specが見つからない
-
-  /api/specs/{id}/schema:
-    get:
-      summary: GraphQLスキーマ取得
-      description: 指定されたOpenAPI Specから生成されたGraphQLスキーマ（SDL形式）を返す
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: GraphQLスキーマ
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  specId:
-                    type: string
-                  specName:
-                    type: string
-                  graphqlSchema:
-                    type: string
-                    description: GraphQLスキーマ（SDL形式）
-        "404":
-          description: Specが見つからない
-        "500":
-          description: スキーマ生成エラー
 ```
