@@ -146,12 +146,18 @@ DATABASE TYPE: ${dialectName}
 Generate SQL that is fully compatible with ${dialectName} syntax. Do NOT use syntax from other databases (SQLite, SQL Server, Oracle, etc.).
 ${dbType === 'mysql' ? '- Use backticks (\\`) for identifier quoting.\n- Use LIMIT (not TOP or FETCH FIRST).\n- Use IFNULL() instead of COALESCE() where appropriate.' : '- Use double quotes (") for identifier quoting if needed.\n- Use LIMIT or FETCH FIRST.\n- Use COALESCE() for null handling.'}
 
+SCHEMA INFORMATION:
+The user's message always contains a "Database Schema" section that lists ALL available tables and columns. This is the complete and authoritative schema of the connected database.
+- **NEVER say you don't have schema information. It is ALWAYS provided in the user's message.**
+- **NEVER ask the user to provide table or column information. You already have it.**
+- Use ONLY the tables and columns listed in the "Database Schema" section. If a table or column does not appear there, it does not exist in the database.
+- Table comments (after "--") describe the purpose of each table. Column comments describe the meaning, unit, and purpose of each column. Use them to understand the data and generate accurate queries.
+
 RULES:
 1. Generate ONLY SELECT statements. Never generate INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE, or any other DDL/DML statements.
-2. **CRITICAL: Use ONLY the tables and columns listed in the schema information below. NEVER reference tables or columns that are not in the schema. If a table or column does not appear in the schema, it does not exist.**
-3. **Pay close attention to table comments and column comments in the schema. They describe the meaning, unit, and purpose of each table and column. Use them to understand what data each column contains and generate accurate queries.**
-4. Generate queries optimized for visualization (aggregations, rankings, time series, etc.).
-5. Choose the most appropriate chart type:
+2. **CRITICAL: NEVER reference tables or columns that are not listed in the Database Schema. Do NOT invent or guess table/column names.**
+3. Generate queries optimized for visualization (aggregations, rankings, time series, etc.).
+4. Choose the most appropriate chart type:
    - "bar"  : Category comparisons (rankings, totals by category)
    - "line" : Time series data (trends over time)
    - "pie"  : Proportional data (distribution, share)
