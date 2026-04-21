@@ -4,7 +4,7 @@
  * アプリケーション全体のレイアウトを定義する最上位コンポーネント。
  *
  * レイアウト構成（screens.md ワイヤーフレーム準拠）:
- * - Header: DataAgentロゴ + DB選択ドロップダウン（管理ボタン付き） + 新しい会話ボタン
+ * - Header: DataAgentロゴ + DB選択ドロップダウン + 管理ボタン + 新しい会話ボタン
  * - Content:
  *   - Sidebar（左 250px）: 検索ボックス + 履歴一覧
  *   - Main（残り幅）: ChatContainer
@@ -20,6 +20,12 @@
  * - ヘッダーに「管理」ボタンを追加（DB管理モーダルを開く）
  * - DbManagementModal コンポーネントを統合
  * - isDbModalOpen state でモーダルの開閉を管理
+ *
+ * PBI #149 更新（自然言語SQL生成・実行）:
+ * - ヘッダーに DB接続先選択ドロップダウンを追加
+ * - selectedDbConnectionId state で選択中のDB接続先IDを管理
+ * - send() に dbConnectionId を渡すよう ChatContainer の onSend を更新
+ * - 接続先が未選択の場合はチャット入力を無効化
  */
 
 import { useState, useCallback, useEffect, useRef, type FC } from 'react'
@@ -28,12 +34,14 @@ import Sidebar from './components/Sidebar/Sidebar'
 import DbManagementModal from './components/DbManagement/DbManagementModal'
 import { useChat } from './hooks/useChat'
 import { useHistory } from './hooks/useHistory'
+import { useDbConnections } from './hooks/useDbConnections'
 
 /**
  * DataAgent アプリケーション ルートコンポーネント
  *
  * ヘッダー + サイドバー + チャットエリアの3カラムレイアウトを構成する。
  * useChat と useHistory を統合し、会話選択・削除・リフレッシュを管理する。
+ * useDbConnections でDB接続先一覧を管理し、選択中のDB接続先をチャットに渡す。
  */
 const App: FC = () => {
   // チャット状態（メッセージ、ローディング、conversationId）
@@ -55,14 +63,49 @@ const App: FC = () => {
     loadConversation,
   } = useHistory()
 
+  // DB接続先一覧（PBI #149 追加: 選択中DB接続先の管理）
+  const { connections, fetchConnections } = useDbConnections()
+
   // DB管理モーダルの開閉状態（PBI #148 追加）
   const [isDbModalOpen, setIsDbModalOpen] = useState(false)
+
+  /**
+   * 選択中のDB接続先ID（PBI #149 追加）
+   *
+   * チャット送信時にバックエンドへ渡し、スキーマ取得・クエリ実行先を指定する。
+   * null = 未選択（チャット入力が無効）
+   */
+  const [selectedDbConnectionId, setSelectedDbConnectionId] = useState<string | null>(null)
 
   /**
    * 前回の isLoading 値を保持するref
    * isLoading が true → false に変わった（送信完了）タイミングを検出するために使用
    */
   const prevIsLoadingRef = useRef<boolean>(false)
+
+  /**
+   * 接続先一覧が変化したとき、選択中IDが存在しない場合はデフォルト選択する
+   *
+   * isLastUsed = true の接続先を優先し、なければ先頭を選択する。
+   * ただし既に有効な選択がある場合は変更しない。
+   */
+  useEffect(() => {
+    if (connections.length === 0) {
+      // 接続先がなくなった場合は選択解除
+      setSelectedDbConnectionId(null)
+      return
+    }
+
+    // 既に有効な選択がある場合はそのまま維持
+    if (selectedDbConnectionId && connections.some((c) => c.id === selectedDbConnectionId)) {
+      return
+    }
+
+    // isLastUsed = true の接続先を優先してデフォルト選択
+    const lastUsed = connections.find((c) => c.isLastUsed)
+    const defaultConnection = lastUsed ?? connections[0]
+    setSelectedDbConnectionId(defaultConnection.id)
+  }, [connections, selectedDbConnectionId])
 
   /**
    * チャット送信完了後に履歴を自動リフレッシュする
@@ -144,9 +187,44 @@ const App: FC = () => {
     }
   }, [conversations, conversationId, clearMessages])
 
+  /**
+   * DB管理モーダルを閉じるハンドラ（PBI #149 追加: モーダル閉時に接続先一覧を再取得）
+   *
+   * モーダルで接続先の追加・更新・削除が行われた可能性があるため、
+   * モーダルを閉じるたびに接続先一覧を再取得して最新状態に保つ。
+   */
+  const handleDbModalClose = useCallback(async () => {
+    setIsDbModalOpen(false)
+    // モーダル閉時に接続先一覧を再取得（追加・更新・削除が反映されるよう）
+    await fetchConnections()
+  }, [fetchConnections])
+
+  /**
+   * チャット送信ハンドラ（PBI #149 追加: dbConnectionId を含めて送信）
+   *
+   * ChatContainer の onSend は (message: string) のシグネチャだが、
+   * useChat.send() は (message: string, dbConnectionId: string) を必要とする。
+   * ここでラップして selectedDbConnectionId を注入する。
+   *
+   * dbConnectionId が未選択の場合は送信しない（UI側で入力を無効化済みだが念のため）。
+   *
+   * @param message - ユーザーが入力した質問テキスト
+   */
+  const handleSend = useCallback(
+    async (message: string): Promise<void> => {
+      if (!selectedDbConnectionId) {
+        // DB接続先が未選択の場合は送信しない
+        console.warn('[App] Cannot send message: no DB connection selected')
+        return
+      }
+      await send(message, selectedDbConnectionId)
+    },
+    [send, selectedDbConnectionId],
+  )
+
   return (
     <div className="app-container">
-      {/* ヘッダー: DataAgentロゴ + DB管理ボタン + 新しい会話ボタン */}
+      {/* ヘッダー: DataAgentロゴ + DB接続先選択 + DB管理ボタン + 新しい会話ボタン */}
       <header className="app-header">
         <div className="app-header__left">
           {/* DataAgent ロゴ */}
@@ -155,6 +233,28 @@ const App: FC = () => {
           <h1 className="app-header__title">DataAgent</h1>
         </div>
         <div className="app-header__right">
+          {/* DB接続先選択ドロップダウン（PBI #149 追加） */}
+          {connections.length > 0 ? (
+            <select
+              className="app-header__db-select"
+              value={selectedDbConnectionId ?? ''}
+              onChange={(e) => setSelectedDbConnectionId(e.target.value || null)}
+              aria-label="DB接続先を選択"
+              title="チャットで使用するDB接続先を選択"
+            >
+              {connections.map((conn) => (
+                <option key={conn.id} value={conn.id}>
+                  {conn.name} ({conn.dbType})
+                </option>
+              ))}
+            </select>
+          ) : (
+            /* 接続先が未登録の場合は案内テキストを表示 */
+            <span className="app-header__no-db-notice" role="status">
+              DB接続先を登録してください
+            </span>
+          )}
+
           {/* DB管理ボタン（PBI #148 追加: DB接続先管理モーダルを開く） */}
           <button
             className="app-header__manage-btn"
@@ -180,7 +280,7 @@ const App: FC = () => {
       {/* DB接続先管理モーダル（PBI #148 追加） */}
       <DbManagementModal
         isOpen={isDbModalOpen}
-        onClose={() => setIsDbModalOpen(false)}
+        onClose={handleDbModalClose}
       />
 
       {/* メインコンテンツ領域（サイドバー + チャットエリア） */}
@@ -201,7 +301,8 @@ const App: FC = () => {
           <ChatContainer
             messages={messages}
             isLoading={isLoading}
-            onSend={send}
+            onSend={handleSend}
+            isDbConnectionSelected={!!selectedDbConnectionId}
           />
         </main>
       </div>

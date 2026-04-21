@@ -1,8 +1,14 @@
 /**
  * スキーマ情報取得サービス
  *
- * PostgreSQL / MySQL の INFORMATION_SCHEMA からテーブル名・カラム名・型・NULL許容を取得する。
+ * PostgreSQL / MySQL の INFORMATION_SCHEMA からテーブル名・カラム名・型・NULL許容・
+ * テーブルコメント・カラムコメントを取得する。
  * DBごとのSQL差異を吸収し、統一されたレスポンス形式で返す。
+ *
+ * PBI #149 改修:
+ *   - dbConnectionId を受け取り、connectionManager.getById() 経由で動的に接続
+ *   - メモリキャッシュ: Map<dbConnectionId, SchemaInfo> でキャッシュを保持
+ *   - キャッシュ無効化: invalidateSchemaCache() を公開し、接続先更新・削除時に呼ぶ
  *
  * レスポンス形式は api.md の /api/schema と同一:
  * {
@@ -10,8 +16,9 @@
  *   tables: [
  *     {
  *       name: string,
+ *       comment: string | null,
  *       columns: [
- *         { name: string, type: string, nullable: boolean }
+ *         { name: string, type: string, nullable: boolean, comment: string | null }
  *       ]
  *     }
  *   ]
@@ -22,8 +29,8 @@
  *   - DBユーザーにはリードオンリー権限（SELECT のみ）を付与することを推奨
  */
 
-import { Knex } from 'knex'
-import { getDb } from './database'
+import Knex, { Knex as KnexType } from 'knex'
+import { getById, ConnectionNotFoundError } from './connectionManager'
 
 /** カラム情報 */
 export interface ColumnInfo {
@@ -58,18 +65,116 @@ interface InformationSchemaColumn {
   column_comment: string | null
 }
 
+// =============================================================================
+// メモリキャッシュ
+// =============================================================================
+
+/**
+ * スキーマ情報のメモリキャッシュ
+ *
+ * キー: dbConnectionId（UUID）
+ * 値: SchemaInfo（テーブル・カラム情報）
+ *
+ * DB選択時にキャッシュを活用することで、同じDBへの繰り返しスキーマ取得を回避する。
+ * サーバーが再起動するとキャッシュはクリアされる（揮発性キャッシュ）。
+ *
+ * 注意: 同期的な Map を使用しているため、マルチスレッド安全ではない。
+ * Node.js はシングルスレッドのため、実用上は問題なし。
+ */
+const schemaCache = new Map<string, SchemaInfo>()
+
+/**
+ * 指定 dbConnectionId のスキーマキャッシュを無効化（削除）する
+ *
+ * DB接続先の更新・削除時に呼び出すことで、古いスキーマ情報を使い続けるのを防ぐ。
+ * 接続先更新ルート（PUT /api/connections/:id）や
+ * 削除ルート（DELETE /api/connections/:id）から呼び出すこと。
+ *
+ * @param dbConnectionId - キャッシュを無効化する接続先ID
+ */
+export function invalidateSchemaCache(dbConnectionId: string): void {
+  if (schemaCache.has(dbConnectionId)) {
+    schemaCache.delete(dbConnectionId)
+    console.info(`[schema] Cache invalidated for dbConnectionId: ${dbConnectionId}`)
+  }
+}
+
+/**
+ * 全スキーマキャッシュをクリアする（テスト用・緊急用）
+ */
+export function clearAllSchemaCache(): void {
+  schemaCache.clear()
+  console.info('[schema] All schema cache cleared')
+}
+
+// =============================================================================
+// 動的接続ファクトリ
+// =============================================================================
+
+/**
+ * dbConnectionId から knex インスタンスを生成する
+ *
+ * connectionManager.getById() で接続先情報（復号済みパスワード含む）を取得し、
+ * 動的にknexインスタンスを生成して返す。
+ * このインスタンスはスキーマ取得後に破棄する（リソースリーク防止）。
+ *
+ * @param dbConnectionId - 接続先ID（UUID）
+ * @returns knexインスタンスと接続先のdatabaseName
+ * @throws ConnectionNotFoundError 接続先が見つからない場合
+ */
+function buildDynamicKnex(dbConnectionId: string): {
+  knex: KnexType
+  databaseName: string
+  dbType: string
+} {
+  // connectionManager.getById() で復号済みパスワードを取得
+  const conn = getById(dbConnectionId)
+
+  // knex クライアント識別子のマッピング
+  const clientMap: Record<string, string> = {
+    mysql: 'mysql2',
+    postgresql: 'pg',
+  }
+
+  const client = clientMap[conn.dbType]
+  if (!client) {
+    throw new Error(`Unsupported DB type: ${conn.dbType}`)
+  }
+
+  const knexInstance = Knex({
+    client,
+    connection: {
+      host: conn.host,
+      port: conn.port,
+      user: conn.username,
+      password: conn.password,
+      database: conn.databaseName,
+    },
+    // スキーマ取得専用のプール（最小限のコネクション）
+    pool: { min: 0, max: 2 },
+    debug: false,
+  })
+
+  return { knex: knexInstance, databaseName: conn.databaseName, dbType: conn.dbType }
+}
+
+// =============================================================================
+// スキーマ取得（DB種別ごとの実装）
+// =============================================================================
+
 /**
  * PostgreSQL 向け: カレントスキーマのテーブル・カラム情報を取得するSQLを実行する
  *
  * current_schema() を使用してデフォルトスキーマ（通常 'public'）のテーブルのみを取得。
  * information_schema の内部テーブル（pg_catalog等）は除外する。
+ * テーブルコメント・カラムコメントは pg_catalog の obj_description / col_description で取得。
  *
  * @param db - knexインスタンス
  * @param database - データベース名
  * @returns スキーマ情報
  */
 async function fetchSchemaPostgresql(
-  db: Knex,
+  db: KnexType,
   database: string
 ): Promise<SchemaInfo> {
   const rows = await db.raw<{ rows: InformationSchemaColumn[] }>(`
@@ -102,13 +207,15 @@ async function fetchSchemaPostgresql(
  *
  * DATABASE() を使用して現在のデータベースのテーブルのみを取得。
  * ビュー (VIEW) は除外し、BASE TABLE のみを対象とする。
+ * テーブルコメントは INFORMATION_SCHEMA.TABLES.TABLE_COMMENT、
+ * カラムコメントは INFORMATION_SCHEMA.COLUMNS.COLUMN_COMMENT で取得。
  *
  * @param db - knexインスタンス
  * @param database - データベース名
  * @returns スキーマ情報
  */
 async function fetchSchemaMysql(
-  db: Knex,
+  db: KnexType,
   database: string
 ): Promise<SchemaInfo> {
   const [rows] = await db.raw<[InformationSchemaColumn[]]>(`
@@ -130,6 +237,10 @@ async function fetchSchemaMysql(
 
   return buildSchemaInfo(database, rows)
 }
+
+// =============================================================================
+// データ変換
+// =============================================================================
 
 /**
  * INFORMATION_SCHEMA の行データを SchemaInfo 形式に変換する
@@ -169,38 +280,85 @@ export function buildSchemaInfo(
   return { database, tables }
 }
 
+// =============================================================================
+// 公開API
+// =============================================================================
+
 /**
- * 接続先DBのスキーマ情報を取得する
+ * 指定DB接続先のスキーマ情報を取得する（キャッシュ優先）
  *
- * DB_TYPE 環境変数に応じて PostgreSQL または MySQL 向けのSQLを実行し、
- * 統一されたレスポンス形式で返す。
+ * キャッシュに該当 dbConnectionId のスキーマが存在する場合は即返却する。
+ * ない場合は動的にDB接続してスキーマを取得し、キャッシュに保存してから返す。
  *
+ * DB_TYPE（dbType）は接続先設定から自動取得する。
  * このサービスはリードオンリー操作のみを行う（SELECT のみ）。
- * DBユーザーには SELECT 権限のみを付与したリードオンリーユーザーの使用を推奨する。
  *
- * @param db - knexインスタンス（省略時は getDb() を使用）
+ * @param dbConnectionId - DB接続先ID（UUID）。connectionManager に登録済みのもの。
  * @returns スキーマ情報
- * @throws DB接続失敗またはクエリエラー
+ * @throws ConnectionNotFoundError 接続先が見つからない場合
+ * @throws Error DB接続失敗またはクエリエラー
  *
  * @example
  * ```typescript
- * const schema = await fetchSchema()
+ * // キャッシュがある場合は即返却（2回目以降は高速）
+ * const schema = await fetchSchema('uuid-of-connection')
  * console.log(schema.tables.map(t => t.name))
  * ```
  */
-export async function fetchSchema(db?: Knex): Promise<SchemaInfo> {
-  const knex = db ?? getDb()
-  const dbType = process.env.DB_TYPE ?? ''
-  const database = process.env.DB_NAME ?? ''
+export async function fetchSchema(dbConnectionId: string): Promise<SchemaInfo> {
+  // キャッシュから返せる場合は即返却（DB接続コストを削減）
+  const cached = schemaCache.get(dbConnectionId)
+  if (cached) {
+    console.info(`[schema] Cache hit for dbConnectionId: ${dbConnectionId}`)
+    return cached
+  }
 
-  switch (dbType) {
-    case 'postgresql':
-      return fetchSchemaPostgresql(knex, database)
-    case 'mysql':
-      return fetchSchemaMysql(knex, database)
-    default:
-      throw new Error(
-        `DB_TYPE="${dbType}" はサポートされていません。'postgresql' または 'mysql' を指定してください。`
-      )
+  console.info(`[schema] Cache miss, fetching from DB for dbConnectionId: ${dbConnectionId}`)
+
+  // 動的knexインスタンスを生成
+  let knexInstance: KnexType | null = null
+  try {
+    const { knex, databaseName, dbType } = buildDynamicKnex(dbConnectionId)
+    knexInstance = knex
+
+    // DB種別に応じてスキーマ取得SQLを実行
+    let schemaInfo: SchemaInfo
+    switch (dbType) {
+      case 'postgresql':
+        schemaInfo = await fetchSchemaPostgresql(knexInstance, databaseName)
+        break
+      case 'mysql':
+        schemaInfo = await fetchSchemaMysql(knexInstance, databaseName)
+        break
+      default:
+        throw new Error(
+          `DB_TYPE="${dbType}" はサポートされていません。'postgresql' または 'mysql' を指定してください。`
+        )
+    }
+
+    // キャッシュに保存（以降のリクエストはキャッシュから返す）
+    schemaCache.set(dbConnectionId, schemaInfo)
+    console.info(
+      `[schema] Schema cached for dbConnectionId: ${dbConnectionId} (${schemaInfo.tables.length} tables)`
+    )
+
+    return schemaInfo
+  } finally {
+    // スキーマ取得後は動的knexインスタンスを破棄してリソースをリリース
+    if (knexInstance) {
+      await knexInstance.destroy()
+    }
   }
 }
+
+// =============================================================================
+// 後方互換性（.envの固定DB接続向け。既存コードとの互換を保つため残存）
+// =============================================================================
+
+// NOTE: 以前の fetchSchema() は .env の固定DB接続を使用していた。
+// PBI #149 改修後は dbConnectionId 必須の新APIに移行したため、
+// 固定接続版は削除した。呼び出し元（routes/schema.ts, routes/chat.ts）も
+// dbConnectionId を必須で渡すよう改修すること。
+
+// Re-export ConnectionNotFoundError for use in routes
+export { ConnectionNotFoundError }

@@ -2,29 +2,80 @@
  * 【モジュール】backend/src/services/schema.ts
  * スキーマ情報取得サービスのユニットテスト
  *
- * モックDBを使用して以下を検証する:
- * - PostgreSQL/MySQL 両DBで適切なSQLが実行されること
- * - buildSchemaInfo() が正しく INFORMATION_SCHEMA 行を変換すること
- * - fetchSchema() が DB_TYPE に応じて適切なロジックを呼び出すこと
- * - エラー時に例外が伝播すること
+ * PBI #149 改修後のテスト:
+ *   - fetchSchema(): dbConnectionId を引数に取り、connectionManager 経由で動的接続
+ *   - buildSchemaInfo(): 純粋関数のため直接テスト
+ *   - invalidateSchemaCache(): キャッシュ無効化の動作確認
+ *
+ * テスト方針:
+ *   - connectionManager.getById() をモックして実際のDB接続を行わない
+ *   - knex をモックして実際のSQLを実行しない
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-// services/schema から必要なものをインポート
-// buildSchemaInfo は純粋関数のため直接テスト可能
+// connectionManager モジュールをモック（実DBへの接続を回避）
+vi.mock('../../backend/src/services/connectionManager', () => ({
+  getById: vi.fn(),
+  ConnectionNotFoundError: class ConnectionNotFoundError extends Error {
+    constructor(id: string) {
+      super(`DB connection with id '${id}' not found.`)
+      this.name = 'ConnectionNotFoundError'
+    }
+  },
+}))
+
+// knex モジュールをモック（実DB接続を回避）
+vi.mock('knex', () => {
+  return {
+    default: vi.fn(() => ({
+      raw: vi.fn(),
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })),
+  }
+})
+
 import {
   buildSchemaInfo,
   fetchSchema,
+  invalidateSchemaCache,
+  clearAllSchemaCache,
   type SchemaInfo,
 } from '../../backend/src/services/schema'
+import { getById } from '../../backend/src/services/connectionManager'
+import Knex from 'knex'
 
-// services/database モジュールをモック
-vi.mock('../../backend/src/services/database', () => ({
-  getDb: vi.fn(),
-}))
+// ---------------------------------------------------------------------------
+// テストヘルパー
+// ---------------------------------------------------------------------------
 
-import { getDb } from '../../backend/src/services/database'
+/**
+ * DB接続先モックオブジェクトを生成するヘルパー
+ */
+function createMockConnection(overrides: Partial<{
+  id: string
+  dbType: 'mysql' | 'postgresql'
+  host: string
+  port: number
+  username: string
+  password: string
+  databaseName: string
+}> = {}) {
+  return {
+    id: 'test-connection-id',
+    name: 'テストDB',
+    dbType: 'postgresql' as const,
+    host: 'localhost',
+    port: 5432,
+    username: 'testuser',
+    password: 'testpass',
+    databaseName: 'testdb',
+    isLastUsed: false,
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
 
 // -------------------------------------------------------------------
 // buildSchemaInfo のユニットテスト
@@ -134,30 +185,23 @@ describe('buildSchemaInfo', () => {
 
 /**
  * 【モジュール】fetchSchema
- * DB_TYPE に応じてPostgreSQL/MySQLのSQL実行と結果変換を行う関数のテスト
+ * dbConnectionId を受け取り、connectionManager 経由で動的接続してスキーマを取得する関数のテスト
  */
 describe('fetchSchema', () => {
-  const originalEnv = process.env
-
   beforeEach(() => {
-    // 環境変数のリセット
-    process.env = { ...originalEnv }
     vi.clearAllMocks()
-  })
-
-  afterEach(() => {
-    process.env = originalEnv
+    // 各テスト前にキャッシュをクリアしてテストを独立させる
+    clearAllSchemaCache()
   })
 
   /**
    * 【テスト対象】fetchSchema（PostgreSQL向け）
-   * 【テスト内容】DB_TYPE=postgresql のとき、current_schema() を使うクエリが実行されること
+   * 【テスト内容】dbType=postgresql のとき、current_schema() を使うクエリが実行されること
    * 【期待結果】INFORMATION_SCHEMA からテーブル・カラム情報が取得され、SchemaInfo形式で返ること
    */
   it('should fetch schema using current_schema() for PostgreSQL', async () => {
-    // Arrange
-    process.env.DB_TYPE = 'postgresql'
-    process.env.DB_NAME = 'pgdb'
+    const mockConnection = createMockConnection({ dbType: 'postgresql', databaseName: 'pgdb' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
 
     const mockRows = [
       { table_name: 'products', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
@@ -165,14 +209,13 @@ describe('fetchSchema', () => {
     ]
 
     const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    vi.mocked(getDb).mockReturnValue(mockDb)
+    const result: SchemaInfo = await fetchSchema('test-connection-id')
 
-    // Act
-    const result: SchemaInfo = await fetchSchema()
-
-    // Assert
     expect(result.database).toBe('pgdb')
     expect(result.tables).toHaveLength(1)
     expect(result.tables[0].name).toBe('products')
@@ -187,13 +230,12 @@ describe('fetchSchema', () => {
 
   /**
    * 【テスト対象】fetchSchema（MySQL向け）
-   * 【テスト内容】DB_TYPE=mysql のとき、DATABASE() を使うクエリが実行されること
+   * 【テスト内容】dbType=mysql のとき、DATABASE() を使うクエリが実行されること
    * 【期待結果】INFORMATION_SCHEMA からテーブル・カラム情報が取得され、SchemaInfo形式で返ること
    */
   it('should fetch schema using DATABASE() for MySQL', async () => {
-    // Arrange
-    process.env.DB_TYPE = 'mysql'
-    process.env.DB_NAME = 'mysqldb'
+    const mockConnection = createMockConnection({ dbType: 'mysql', databaseName: 'mysqldb' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
 
     const mockRows = [
       { table_name: 'customers', table_comment: null, column_name: 'customer_id', data_type: 'int', is_nullable: 'NO', column_comment: null },
@@ -202,14 +244,13 @@ describe('fetchSchema', () => {
 
     // MySQL の knex.raw は [rows, fields] のタプルを返す
     const mockRaw = vi.fn().mockResolvedValue([mockRows, []])
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    vi.mocked(getDb).mockReturnValue(mockDb)
+    const result: SchemaInfo = await fetchSchema('test-connection-id')
 
-    // Act
-    const result: SchemaInfo = await fetchSchema()
-
-    // Assert
     expect(result.database).toBe('mysqldb')
     expect(result.tables).toHaveLength(1)
     expect(result.tables[0].name).toBe('customers')
@@ -225,60 +266,22 @@ describe('fetchSchema', () => {
 
   /**
    * 【テスト対象】fetchSchema
-   * 【テスト内容】DB_TYPE が不正な値の場合
+   * 【テスト内容】dbType が不正な値の場合
    * 【期待結果】サポート外エラーがスローされること
    */
-  it('should throw error when DB_TYPE is unsupported', async () => {
-    // Arrange
-    process.env.DB_TYPE = 'oracle'
-    process.env.DB_NAME = 'oracledb'
+  it('should throw error when dbType is unsupported', async () => {
+    const mockConnection = createMockConnection({ dbType: 'postgresql' })
+    // dbType を上書きするために any キャスト
+    const connWithInvalidType = { ...mockConnection, dbType: 'oracle' }
+    vi.mocked(getById).mockReturnValue(connWithInvalidType as any)
 
-    const mockDb = { raw: vi.fn() } as any
-    vi.mocked(getDb).mockReturnValue(mockDb)
+    const mockRaw = vi.fn()
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    // Act & Assert
-    await expect(fetchSchema()).rejects.toThrow('oracle')
-  })
-
-  /**
-   * 【テスト対象】fetchSchema
-   * 【テスト内容】DB_TYPE が未設定の場合
-   * 【期待結果】サポート外エラーがスローされること
-   */
-  it('should throw error when DB_TYPE is not set', async () => {
-    // Arrange
-    delete process.env.DB_TYPE
-    process.env.DB_NAME = 'somedb'
-
-    const mockDb = { raw: vi.fn() } as any
-    vi.mocked(getDb).mockReturnValue(mockDb)
-
-    // Act & Assert
-    await expect(fetchSchema()).rejects.toThrow()
-  })
-
-  /**
-   * 【テスト対象】fetchSchema
-   * 【テスト内容】引数でknexインスタンスを渡した場合
-   * 【期待結果】getDb() を呼ばずに、渡されたインスタンスを使用すること
-   */
-  it('should use provided db instance instead of getDb()', async () => {
-    // Arrange
-    process.env.DB_TYPE = 'postgresql'
-    process.env.DB_NAME = 'injecteddb'
-
-    const mockRows = [
-      { table_name: 'test_table', table_comment: null, column_name: 'col1', data_type: 'integer', is_nullable: 'NO', column_comment: null },
-    ]
-    const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
-    const injectedDb = { raw: mockRaw } as any
-
-    // Act
-    const result = await fetchSchema(injectedDb)
-
-    // Assert
-    expect(result.database).toBe('injecteddb')
-    expect(getDb).not.toHaveBeenCalled()
+    await expect(fetchSchema('test-connection-id')).rejects.toThrow('oracle')
   })
 
   /**
@@ -287,16 +290,69 @@ describe('fetchSchema', () => {
    * 【期待結果】エラーが呼び出し元に伝播されること
    */
   it('should propagate DB errors to the caller', async () => {
-    // Arrange
-    process.env.DB_TYPE = 'postgresql'
-    process.env.DB_NAME = 'errordb'
+    const mockConnection = createMockConnection({ dbType: 'postgresql' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
 
     const mockRaw = vi.fn().mockRejectedValue(new Error('Connection refused'))
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    vi.mocked(getDb).mockReturnValue(mockDb)
+    await expect(fetchSchema('test-connection-id')).rejects.toThrow('Connection refused')
+  })
+})
 
-    // Act & Assert
-    await expect(fetchSchema()).rejects.toThrow('Connection refused')
+// -------------------------------------------------------------------
+// invalidateSchemaCache のユニットテスト
+// -------------------------------------------------------------------
+
+/**
+ * 【モジュール】invalidateSchemaCache
+ * スキーマキャッシュ無効化関数のテスト
+ */
+describe('invalidateSchemaCache', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    clearAllSchemaCache()
+  })
+
+  /**
+   * 【テスト対象】invalidateSchemaCache
+   * 【テスト内容】存在しないキーを無効化しようとした場合
+   * 【期待結果】エラーなく完了すること（べき等）
+   */
+  it('should complete without error for non-existent cache key', () => {
+    expect(() => invalidateSchemaCache('non-existent-id')).not.toThrow()
+  })
+
+  /**
+   * 【テスト対象】invalidateSchemaCache
+   * 【テスト内容】キャッシュ無効化後にfetchSchemaを呼んだ場合
+   * 【期待結果】キャッシュではなくDBから再取得されること（getById が再度呼ばれること）
+   */
+  it('should cause re-fetch after cache invalidation', async () => {
+    const mockConnection = createMockConnection({ dbType: 'postgresql', databaseName: 'pgdb' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
+
+    const mockRows = [
+      { table_name: 'test', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
+    ]
+    const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
+
+    // 1回目のfetchSchema（キャッシュされる）
+    await fetchSchema('test-connection-id')
+    expect(mockRaw).toHaveBeenCalledTimes(1)
+
+    // キャッシュ無効化
+    invalidateSchemaCache('test-connection-id')
+
+    // 2回目のfetchSchema（キャッシュが無効化されているのでDBから再取得）
+    await fetchSchema('test-connection-id')
+    expect(mockRaw).toHaveBeenCalledTimes(2)
   })
 })

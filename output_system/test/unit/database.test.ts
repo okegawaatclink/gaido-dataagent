@@ -2,13 +2,14 @@
  * 【モジュール】backend/src/services/database.ts
  * DB接続ファクトリ・クエリ実行サービスのユニットテスト
  *
- * テスト対象:
- *   - resolveKnexClient(): DB_TYPE → knex クライアント名変換
- *   - buildKnexConfig(): 環境変数から knex 設定を構築
- *   - getDb(): シングルトンインスタンスの取得
- *   - resetDbInstance(): テスト用リセット
- *   - executeQuery(): SQL実行と結果の正規化
- *   - SqlValidationError: カスタムエラークラス
+ * PBI #149 改修後のテスト:
+ *   - executeQuery(): dbConnectionId + SQL を引数に取り、connectionManager 経由で動的接続
+ *   - SqlValidationError: カスタムエラークラスの instanceof チェック
+ *   - destroyConnection(): 接続プール破棄（副作用なしで完了すること）
+ *
+ * テスト方針:
+ *   - connectionManager.getById() をモックして実際のDB接続を行わない
+ *   - sqlValidator.validate() をモックしてバリデーションロジックを独立してテスト
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -18,203 +19,75 @@ vi.mock('../../backend/src/services/sqlValidator', () => ({
   validate: vi.fn(),
 }))
 
+// connectionManager モジュールをモック（実DBへの接続を回避）
+vi.mock('../../backend/src/services/connectionManager', () => ({
+  getById: vi.fn(),
+  ConnectionNotFoundError: class ConnectionNotFoundError extends Error {
+    constructor(id: string) {
+      super(`DB connection with id '${id}' not found.`)
+      this.name = 'ConnectionNotFoundError'
+    }
+  },
+}))
+
+// knex モジュールをモック（実DB接続を回避）
+vi.mock('knex', () => {
+  return {
+    default: vi.fn(() => ({
+      raw: vi.fn(),
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })),
+  }
+})
+
 import {
-  resolveKnexClient,
-  buildKnexConfig,
-  getDb,
-  resetDbInstance,
-  closeDb,
   executeQuery,
+  destroyConnection,
+  destroyAllConnections,
   SqlValidationError,
 } from '../../backend/src/services/database'
 import { validate } from '../../backend/src/services/sqlValidator'
+import { getById } from '../../backend/src/services/connectionManager'
+import Knex from 'knex'
 
 // ---------------------------------------------------------------------------
-// resolveKnexClient のテスト
+// テストセットアップ: 各テスト前に接続プールをクリア
 // ---------------------------------------------------------------------------
-
-describe('resolveKnexClient', () => {
-  /**
-   * 【テスト対象】resolveKnexClient
-   * 【テスト内容】'postgresql' を渡した場合
-   * 【期待結果】'pg' が返ること
-   */
-  it('should return "pg" for "postgresql"', () => {
-    expect(resolveKnexClient('postgresql')).toBe('pg')
-  })
-
-  /**
-   * 【テスト対象】resolveKnexClient
-   * 【テスト内容】'mysql' を渡した場合
-   * 【期待結果】'mysql2' が返ること
-   */
-  it('should return "mysql2" for "mysql"', () => {
-    expect(resolveKnexClient('mysql')).toBe('mysql2')
-  })
-
-  /**
-   * 【テスト対象】resolveKnexClient
-   * 【テスト内容】サポート外の値を渡した場合
-   * 【期待結果】エラーがスローされること
-   */
-  it('should throw error for unsupported DB type', () => {
-    expect(() => resolveKnexClient('oracle')).toThrow('oracle')
-  })
-})
+// database.ts はモジュールレベルの connectionPool (Map) を持つ。
+// テスト間の独立性を確保するため、各テスト後に destroyAllConnections() で
+// プールをクリアする。これにより各テストで新しい Knex モックが適用される。
 
 // ---------------------------------------------------------------------------
-// buildKnexConfig のテスト
+// テストヘルパー
 // ---------------------------------------------------------------------------
 
-describe('buildKnexConfig', () => {
-  const originalEnv = process.env
-
-  beforeEach(() => {
-    process.env = { ...originalEnv }
-  })
-
-  afterEach(() => {
-    process.env = originalEnv
-  })
-
-  /**
-   * 【テスト対象】buildKnexConfig
-   * 【テスト内容】必須環境変数がすべて設定されている場合
-   * 【期待結果】正しい knex 設定オブジェクトが返ること
-   */
-  it('should build config from environment variables', () => {
-    process.env.DB_TYPE = 'postgresql'
-    process.env.DB_HOST = 'localhost'
-    process.env.DB_PORT = '5432'
-    process.env.DB_USER = 'testuser'
-    process.env.DB_PASSWORD = 'testpass'
-    process.env.DB_NAME = 'testdb'
-
-    const config = buildKnexConfig()
-
-    expect(config.client).toBe('pg')
-    expect((config.connection as Record<string, unknown>).host).toBe('localhost')
-    expect((config.connection as Record<string, unknown>).port).toBe(5432)
-    expect((config.connection as Record<string, unknown>).user).toBe('testuser')
-    expect((config.connection as Record<string, unknown>).password).toBe('testpass')
-    expect((config.connection as Record<string, unknown>).database).toBe('testdb')
-  })
-
-  /**
-   * 【テスト対象】buildKnexConfig
-   * 【テスト内容】DB_PORT が未設定の場合にデフォルトポートが使われること
-   * 【期待結果】PostgreSQLの場合は5432が使われること
-   */
-  it('should use default port 5432 for postgresql when DB_PORT is not set', () => {
-    process.env.DB_TYPE = 'postgresql'
-    process.env.DB_HOST = 'localhost'
-    delete process.env.DB_PORT
-    process.env.DB_USER = 'testuser'
-    process.env.DB_NAME = 'testdb'
-
-    const config = buildKnexConfig()
-    expect((config.connection as Record<string, unknown>).port).toBe(5432)
-  })
-
-  /**
-   * 【テスト対象】buildKnexConfig
-   * 【テスト内容】MySQLでDB_PORT未設定の場合にデフォルトポート3306が使われること
-   * 【期待結果】ポート3306が返ること
-   */
-  it('should use default port 3306 for mysql when DB_PORT is not set', () => {
-    process.env.DB_TYPE = 'mysql'
-    process.env.DB_HOST = 'localhost'
-    delete process.env.DB_PORT
-    process.env.DB_USER = 'testuser'
-    process.env.DB_NAME = 'testdb'
-
-    const config = buildKnexConfig()
-    expect((config.connection as Record<string, unknown>).port).toBe(3306)
-  })
-
-  /**
-   * 【テスト対象】buildKnexConfig
-   * 【テスト内容】DB_PASSWORD が未設定の場合に空文字が使われること
-   * 【期待結果】password が空文字列であること
-   */
-  it('should use empty string for password when DB_PASSWORD is not set', () => {
-    process.env.DB_TYPE = 'postgresql'
-    process.env.DB_HOST = 'localhost'
-    process.env.DB_USER = 'testuser'
-    process.env.DB_NAME = 'testdb'
-    delete process.env.DB_PASSWORD
-
-    const config = buildKnexConfig()
-    expect((config.connection as Record<string, unknown>).password).toBe('')
-  })
-
-  /**
-   * 【テスト対象】buildKnexConfig
-   * 【テスト内容】必須環境変数が欠落している場合
-   * 【期待結果】エラーがスローされること
-   */
-  it('should throw error when required env variables are missing', () => {
-    delete process.env.DB_TYPE
-    delete process.env.DB_HOST
-    delete process.env.DB_USER
-    delete process.env.DB_NAME
-
-    expect(() => buildKnexConfig()).toThrow('DB_TYPE')
-  })
-
-  /**
-   * 【テスト対象】buildKnexConfig
-   * 【テスト内容】DB_HOST のみ欠落している場合
-   * 【期待結果】エラーメッセージに DB_HOST が含まれること
-   */
-  it('should include missing variable name in error message', () => {
-    process.env.DB_TYPE = 'postgresql'
-    delete process.env.DB_HOST
-    process.env.DB_USER = 'testuser'
-    process.env.DB_NAME = 'testdb'
-
-    expect(() => buildKnexConfig()).toThrow('DB_HOST')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// getDb / resetDbInstance / closeDb のテスト
-// ---------------------------------------------------------------------------
-
-describe('getDb / resetDbInstance / closeDb', () => {
-  const originalEnv = process.env
-
-  beforeEach(() => {
-    process.env = { ...originalEnv }
-    resetDbInstance(null)
-  })
-
-  afterEach(() => {
-    resetDbInstance(null)
-    process.env = originalEnv
-  })
-
-  /**
-   * 【テスト対象】resetDbInstance
-   * 【テスト内容】モックインスタンスを注入した場合にそれが返ること
-   * 【期待結果】注入したインスタンスが getDb() から返ること
-   */
-  it('should return injected instance after resetDbInstance', () => {
-    const mockInstance = { mock: true } as any
-    resetDbInstance(mockInstance)
-    expect(getDb()).toBe(mockInstance)
-  })
-
-  /**
-   * 【テスト対象】closeDb
-   * 【テスト内容】インスタンスが null の場合にエラーなく完了すること
-   * 【期待結果】エラーがスローされないこと
-   */
-  it('should not throw when closing with no instance', async () => {
-    resetDbInstance(null)
-    await expect(closeDb()).resolves.not.toThrow()
-  })
-})
+/**
+ * DB接続先モックオブジェクトを生成するヘルパー
+ */
+function createMockConnection(overrides: Partial<{
+  id: string
+  dbType: 'mysql' | 'postgresql'
+  host: string
+  port: number
+  username: string
+  password: string
+  databaseName: string
+}> = {}) {
+  return {
+    id: 'test-connection-id',
+    name: 'テストDB',
+    dbType: 'postgresql' as const,
+    host: 'localhost',
+    port: 5432,
+    username: 'testuser',
+    password: 'testpass',
+    databaseName: 'testdb',
+    isLastUsed: false,
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
 
 // ---------------------------------------------------------------------------
 // executeQuery のテスト
@@ -228,19 +101,22 @@ describe('executeQuery', () => {
     vi.clearAllMocks()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env = originalEnv
+    // 接続プールをクリア（テスト間の独立性確保: 各テストで新しい Knex モックを適用）
+    // afterEach でクリアすることで、次のテストが始まる前に必ず空の状態になる
+    await destroyAllConnections()
   })
 
   /**
    * 【テスト対象】executeQuery
-   * 【テスト内容】バリデーション失敗時に SqlValidationError がスローされること
-   * 【期待結果】SqlValidationError がスローされること
+   * 【テスト内容】SQLバリデーション失敗時に SqlValidationError がスローされること
+   * 【期待結果】SqlValidationError がスローされること（DB接続前にバリデーションで弾かれる）
    */
   it('should throw SqlValidationError when validation fails', async () => {
     vi.mocked(validate).mockReturnValue({ ok: false, reason: 'Forbidden keyword' })
 
-    await expect(executeQuery('DROP TABLE users')).rejects.toThrow(SqlValidationError)
+    await expect(executeQuery('validation-fail-conn-id', 'DROP TABLE users')).rejects.toThrow(SqlValidationError)
   })
 
   /**
@@ -249,8 +125,9 @@ describe('executeQuery', () => {
    * 【期待結果】正規化された QueryResult が返ること
    */
   it('should execute query and return normalized result for PostgreSQL', async () => {
-    process.env.DB_TYPE = 'postgresql'
-
+    const connId = 'pg-conn-id-001'
+    const mockConnection = createMockConnection({ id: connId, dbType: 'postgresql' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
     vi.mocked(validate).mockReturnValue({ ok: true, sanitizedSql: 'SELECT id, name FROM users' })
 
     const mockRows = [
@@ -258,9 +135,12 @@ describe('executeQuery', () => {
       { id: 2, name: 'Bob' },
     ]
     const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    const result = await executeQuery('SELECT id, name FROM users', mockDb)
+    const result = await executeQuery(connId, 'SELECT id, name FROM users')
 
     expect(result.columns).toEqual(['id', 'name'])
     expect(result.rows).toHaveLength(2)
@@ -273,15 +153,19 @@ describe('executeQuery', () => {
    * 【期待結果】タプル形式の結果から正規化された QueryResult が返ること
    */
   it('should execute query and return normalized result for MySQL', async () => {
-    process.env.DB_TYPE = 'mysql'
-
+    const connId = 'mysql-conn-id-002'
+    const mockConnection = createMockConnection({ id: connId, dbType: 'mysql' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
     vi.mocked(validate).mockReturnValue({ ok: true, sanitizedSql: 'SELECT id FROM orders' })
 
     const mockRows = [{ id: 1 }, { id: 2 }]
     const mockRaw = vi.fn().mockResolvedValue([mockRows, []])
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    const result = await executeQuery('SELECT id FROM orders', mockDb)
+    const result = await executeQuery(connId, 'SELECT id FROM orders')
 
     expect(result.columns).toEqual(['id'])
     expect(result.rows).toHaveLength(2)
@@ -293,14 +177,18 @@ describe('executeQuery', () => {
    * 【期待結果】columns が空配列、rows が空配列で返ること
    */
   it('should return empty columns and rows when result is empty', async () => {
-    process.env.DB_TYPE = 'postgresql'
-
+    const connId = 'pg-conn-id-003'
+    const mockConnection = createMockConnection({ id: connId, dbType: 'postgresql' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
     vi.mocked(validate).mockReturnValue({ ok: true, sanitizedSql: 'SELECT * FROM empty_table' })
 
     const mockRaw = vi.fn().mockResolvedValue({ rows: [] })
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    const result = await executeQuery('SELECT * FROM empty_table', mockDb)
+    const result = await executeQuery(connId, 'SELECT * FROM empty_table')
 
     expect(result.columns).toEqual([])
     expect(result.rows).toEqual([])
@@ -312,15 +200,19 @@ describe('executeQuery', () => {
    * 【期待結果】BigInt が文字列化されていること
    */
   it('should normalize BigInt values to strings', async () => {
-    process.env.DB_TYPE = 'postgresql'
-
+    const connId = 'pg-conn-id-004'
+    const mockConnection = createMockConnection({ id: connId, dbType: 'postgresql' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
     vi.mocked(validate).mockReturnValue({ ok: true, sanitizedSql: 'SELECT big_num FROM data' })
 
     const mockRows = [{ big_num: BigInt('9999999999999999') }]
     const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    const result = await executeQuery('SELECT big_num FROM data', mockDb)
+    const result = await executeQuery(connId, 'SELECT big_num FROM data')
 
     expect(result.rows[0].big_num).toBe('9999999999999999')
   })
@@ -331,16 +223,20 @@ describe('executeQuery', () => {
    * 【期待結果】Date が ISO 8601 文字列化されていること
    */
   it('should normalize Date values to ISO strings', async () => {
-    process.env.DB_TYPE = 'postgresql'
-
+    const connId = 'pg-conn-id-005'
+    const mockConnection = createMockConnection({ id: connId, dbType: 'postgresql' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
     vi.mocked(validate).mockReturnValue({ ok: true, sanitizedSql: 'SELECT created_at FROM data' })
 
     const testDate = new Date('2024-01-15T10:30:00.000Z')
     const mockRows = [{ created_at: testDate }]
     const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    const result = await executeQuery('SELECT created_at FROM data', mockDb)
+    const result = await executeQuery(connId, 'SELECT created_at FROM data')
 
     expect(result.rows[0].created_at).toBe('2024-01-15T10:30:00.000Z')
   })
@@ -351,54 +247,51 @@ describe('executeQuery', () => {
    * 【期待結果】null が保持されること
    */
   it('should preserve null values', async () => {
-    process.env.DB_TYPE = 'postgresql'
-
+    const connId = 'pg-conn-id-006'
+    const mockConnection = createMockConnection({ id: connId, dbType: 'postgresql' })
+    vi.mocked(getById).mockReturnValue(mockConnection)
     vi.mocked(validate).mockReturnValue({ ok: true, sanitizedSql: 'SELECT nullable_col FROM data' })
 
     const mockRows = [{ nullable_col: null }]
     const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
-    const mockDb = { raw: mockRaw } as any
+    vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      raw: mockRaw,
+      destroy: vi.fn().mockResolvedValue(undefined),
+    })
 
-    const result = await executeQuery('SELECT nullable_col FROM data', mockDb)
+    const result = await executeQuery(connId, 'SELECT nullable_col FROM data')
 
     expect(result.rows[0].nullable_col).toBeNull()
   })
+})
 
-  /**
-   * 【テスト対象】executeQuery
-   * 【テスト内容】sanitizedSql が使用されること
-   * 【期待結果】validate が返した sanitizedSql が DB に渡されること
-   */
-  it('should use sanitizedSql from validator', async () => {
-    process.env.DB_TYPE = 'postgresql'
+// ---------------------------------------------------------------------------
+// destroyConnection / destroyAllConnections のテスト
+// ---------------------------------------------------------------------------
 
-    vi.mocked(validate).mockReturnValue({ ok: true, sanitizedSql: 'SELECT * FROM users' })
-
-    const mockRaw = vi.fn().mockResolvedValue({ rows: [] })
-    const mockDb = { raw: mockRaw } as any
-
-    await executeQuery('SELECT * FROM users -- comment', mockDb)
-
-    // sanitizedSql が渡されていること（コメント除去後のSQL）
-    expect(mockRaw).toHaveBeenCalledWith('SELECT * FROM users')
+describe('destroyConnection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
   /**
-   * 【テスト対象】executeQuery
-   * 【テスト内容】sanitizedSql が undefined の場合は元の SQL が使用されること
-   * 【期待結果】元の SQL 文が DB に渡されること
+   * 【テスト対象】destroyConnection
+   * 【テスト内容】存在しない接続先IDを渡した場合
+   * 【期待結果】エラーなく完了すること（プールに存在しない場合は何もしない）
    */
-  it('should fall back to original sql when sanitizedSql is undefined', async () => {
-    process.env.DB_TYPE = 'postgresql'
+  it('should complete without error for non-existent connection id', async () => {
+    await expect(destroyConnection('non-existent-id')).resolves.not.toThrow()
+  })
+})
 
-    vi.mocked(validate).mockReturnValue({ ok: true })
-
-    const mockRaw = vi.fn().mockResolvedValue({ rows: [] })
-    const mockDb = { raw: mockRaw } as any
-
-    await executeQuery('SELECT 1', mockDb)
-
-    expect(mockRaw).toHaveBeenCalledWith('SELECT 1')
+describe('destroyAllConnections', () => {
+  /**
+   * 【テスト対象】destroyAllConnections
+   * 【テスト内容】プールが空の場合に呼び出した場合
+   * 【期待結果】エラーなく完了すること
+   */
+  it('should complete without error when pool is empty', async () => {
+    await expect(destroyAllConnections()).resolves.not.toThrow()
   })
 })
 

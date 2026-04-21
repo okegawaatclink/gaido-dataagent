@@ -32,6 +32,8 @@ import {
   ConnectionNotFoundError,
   DbConnectionInput,
 } from '../services/connectionManager'
+import { invalidateSchemaCache } from '../services/schema'
+import { destroyConnection } from '../services/database'
 
 const router = Router()
 
@@ -234,7 +236,7 @@ router.post('/test', async (req: Request, res: Response) => {
  * @returns 404 Not Found - 指定IDが存在しない
  * @returns 409 Conflict - 接続名の重複
  */
-router.put('/:id', (req: Request<{ id: string }>, res: Response) => {
+router.put('/:id', async (req: Request<{ id: string }>, res: Response) => {
   const { id } = req.params
 
   // リクエストボディをバリデーション（パスワード省略可）
@@ -245,6 +247,12 @@ router.put('/:id', (req: Request<{ id: string }>, res: Response) => {
 
   try {
     const updated = update(id, validation.input!)
+
+    // PBI #149: 接続先更新時にスキーマキャッシュと接続プールを無効化する
+    // 接続先情報が変わった場合、古いキャッシュを使い続けないよう即座に無効化する
+    invalidateSchemaCache(id)
+    await destroyConnection(id)
+
     return res.status(200).json(updated)
   } catch (err) {
     if (err instanceof ConnectionNotFoundError) {
@@ -269,11 +277,17 @@ router.put('/:id', (req: Request<{ id: string }>, res: Response) => {
  * @returns 204 No Content - 削除成功（ボディなし）
  * @returns 404 Not Found - 指定IDが存在しない
  */
-router.delete('/:id', (req: Request<{ id: string }>, res: Response) => {
+router.delete('/:id', async (req: Request<{ id: string }>, res: Response) => {
   const { id } = req.params
 
   try {
     remove(id)
+
+    // PBI #149: 接続先削除時にスキーマキャッシュと接続プールを無効化する
+    // 削除された接続先のリソースを速やかに解放してメモリリークを防ぐ
+    invalidateSchemaCache(id)
+    await destroyConnection(id)
+
     // 204 No Content: 削除成功はボディを返さない（RESTの慣例）
     return res.status(204).send()
   } catch (err) {

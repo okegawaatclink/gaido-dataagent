@@ -7,7 +7,7 @@
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
-import { closeDb } from './services/database'
+import { destroyAllConnections } from './services/database'
 import { initHistoryDb, closeHistoryDb } from './services/historyDb'
 import schemaRouter from './routes/schema'
 import chatRouter from './routes/chat'
@@ -171,7 +171,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
   console.log(`${signal} received. Shutting down gracefully...`)
   server.close(async () => {
     try {
-      await closeDb()
+      // PBI #149: 動的DB接続のプールを全て破棄
+      await destroyAllConnections()
       console.log('DB connection closed.')
     } catch (err) {
       console.error('Error closing DB connection:', err)
