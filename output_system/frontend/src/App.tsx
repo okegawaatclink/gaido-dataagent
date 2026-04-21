@@ -4,7 +4,7 @@
  * アプリケーション全体のレイアウトを定義する最上位コンポーネント。
  *
  * レイアウト構成（screens.md ワイヤーフレーム準拠）:
- * - Header: DataAgentロゴ + 新しい会話ボタン
+ * - Header: DataAgentロゴ + DB選択ドロップダウン（管理ボタン付き） + 新しい会話ボタン
  * - Content:
  *   - Sidebar（左 250px）: 検索ボックス + 履歴一覧
  *   - Main（残り幅）: ChatContainer
@@ -15,11 +15,17 @@
  * - 会話選択時に GET /api/history/:id でメッセージを復元
  * - 会話削除後に履歴リフレッシュ + 削除した会話がアクティブならクリア
  * - チャット送信後（SSE done イベント後）に履歴自動リフレッシュ
+ *
+ * PBI #148 更新（DB接続先管理UI）:
+ * - ヘッダーに「管理」ボタンを追加（DB管理モーダルを開く）
+ * - DbManagementModal コンポーネントを統合
+ * - isDbModalOpen state でモーダルの開閉を管理
  */
 
-import { useCallback, useEffect, useRef, type FC } from 'react'
+import { useState, useCallback, useEffect, useRef, type FC } from 'react'
 import ChatContainer from './components/Chat/ChatContainer'
 import Sidebar from './components/Sidebar/Sidebar'
+import DbManagementModal from './components/DbManagement/DbManagementModal'
 import { useChat } from './hooks/useChat'
 import { useHistory } from './hooks/useHistory'
 
@@ -48,6 +54,9 @@ const App: FC = () => {
     refreshHistory,
     loadConversation,
   } = useHistory()
+
+  // DB管理モーダルの開閉状態（PBI #148 追加）
+  const [isDbModalOpen, setIsDbModalOpen] = useState(false)
 
   /**
    * 前回の isLoading 値を保持するref
@@ -137,7 +146,7 @@ const App: FC = () => {
 
   return (
     <div className="app-container">
-      {/* ヘッダー: DataAgentロゴ + 新しい会話ボタン */}
+      {/* ヘッダー: DataAgentロゴ + DB管理ボタン + 新しい会話ボタン */}
       <header className="app-header">
         <div className="app-header__left">
           {/* DataAgent ロゴ */}
@@ -146,6 +155,16 @@ const App: FC = () => {
           <h1 className="app-header__title">DataAgent</h1>
         </div>
         <div className="app-header__right">
+          {/* DB管理ボタン（PBI #148 追加: DB接続先管理モーダルを開く） */}
+          <button
+            className="app-header__manage-btn"
+            onClick={() => setIsDbModalOpen(true)}
+            type="button"
+            aria-label="DB接続先を管理"
+            aria-haspopup="dialog"
+          >
+            管理
+          </button>
           {/* 新しい会話ボタン */}
           <button
             className="app-header__new-chat-btn"
@@ -157,6 +176,12 @@ const App: FC = () => {
           </button>
         </div>
       </header>
+
+      {/* DB接続先管理モーダル（PBI #148 追加） */}
+      <DbManagementModal
+        isOpen={isDbModalOpen}
+        onClose={() => setIsDbModalOpen(false)}
+      />
 
       {/* メインコンテンツ領域（サイドバー + チャットエリア） */}
       <div className="app-content">
