@@ -13,6 +13,7 @@
  *   - markDbConnectionAsLastUsed(): is_last_used フラグが排他的に更新されること
  *   - createConversation()    : 会話レコードが作成されること（db_connection_id が必須）
  *   - listConversations()     : updated_at 降順で一覧取得できること
+ *   - listConversationsByDbConnectionId(): DB接続先IDでフィルタリングした一覧取得（PBI #151）
  *   - getConversationById()   : 指定IDの会話を取得できること
  *   - deleteConversation()    : 会話とメッセージが CASCADE 削除されること
  *   - createMessage()         : メッセージレコードが作成されること
@@ -35,6 +36,7 @@ import {
   markDbConnectionAsLastUsed,
   createConversation,
   listConversations,
+  listConversationsByDbConnectionId,
   getConversationById,
   deleteConversation,
   updateConversationTimestamp,
@@ -212,6 +214,61 @@ describe('historyDb: conversations Repository', () => {
     expect(conversations).toHaveLength(3)
     // conv-1 が最も新しい updated_at を持つため先頭に来ること
     expect(conversations[0].id).toBe('conv-1')
+  })
+
+  /**
+   * 【テスト対象】listConversationsByDbConnectionId()（PBI #151 追加）
+   * 【テスト内容】指定DB接続先に紐づく会話のみが返ること
+   * 【期待結果】
+   *   - 指定DB接続先の会話のみが返ること（他DB接続先の会話は含まれない）
+   *
+   * 【前提条件】
+   * - beforeEach で createTestDbConnection(db) が呼ばれ 'test-conn-id' が存在する
+   * - 2つ目のDB接続先は別のIDで作成する
+   */
+  it('should return only conversations for the specified db connection id', () => {
+    // beforeEach で作成された test-conn-id に会話を追加
+    createConversation(db, { id: 'conv-a1', db_connection_id: 'test-conn-id', title: 'テストDB会話1' })
+    createConversation(db, { id: 'conv-a2', db_connection_id: 'test-conn-id', title: 'テストDB会話2' })
+
+    // 2つ目のDB接続先を作成し会話を追加
+    createTestDbConnection(db, 'other-conn-id')
+    createConversation(db, { id: 'conv-b1', db_connection_id: 'other-conn-id', title: 'OtherDB会話1' })
+
+    // test-conn-id の会話のみ取得
+    const results = listConversationsByDbConnectionId(db, 'test-conn-id')
+
+    expect(results).toHaveLength(2)
+    // test-conn-id の会話のみが返ること
+    expect(results.every((c) => c.db_connection_id === 'test-conn-id')).toBe(true)
+    // other-conn-id の会話は含まれないこと
+    expect(results.find((c) => c.id === 'conv-b1')).toBeUndefined()
+  })
+
+  /**
+   * 【テスト対象】listConversationsByDbConnectionId()（PBI #151 追加）
+   * 【テスト内容】指定DB接続先に会話がない場合、空配列が返ること
+   * 【期待結果】空配列
+   *
+   * 【前提条件】
+   * - beforeEach で createTestDbConnection(db) が呼ばれ 'test-conn-id' が存在するが会話はない
+   */
+  it('should return empty array when no conversations exist for the specified db connection id', () => {
+    // beforeEach で test-conn-id は既に作成済み、会話は作成しない
+
+    const results = listConversationsByDbConnectionId(db, 'test-conn-id')
+
+    expect(results).toHaveLength(0)
+  })
+
+  /**
+   * 【テスト対象】listConversationsByDbConnectionId()（PBI #151 追加）
+   * 【テスト内容】存在しないDB接続先IDを指定した場合、空配列が返ること
+   * 【期待結果】空配列
+   */
+  it('should return empty array for non-existent db connection id', () => {
+    const results = listConversationsByDbConnectionId(db, 'non-existent-conn-id')
+    expect(results).toHaveLength(0)
   })
 
   /**

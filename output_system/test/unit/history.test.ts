@@ -5,7 +5,9 @@
  * historyDb サービスはモック化して使用する。
  *
  * テスト対象:
- *   - GET /api/history        : 会話一覧の正常取得（camelCase 変換含む）
+ *   - GET /api/history?dbConnectionId=xxx : 会話一覧の正常取得（camelCase 変換含む）
+ *   - GET /api/history?dbConnectionId=xxx : dbConnectionId 未指定で 400 を返すこと（PBI #151）
+ *   - GET /api/history?dbConnectionId=xxx : 非UUID形式の dbConnectionId で 400 を返すこと（PBI #151）
  *   - GET /api/history/:id    : 会話詳細の正常取得（messages 含む）
  *   - GET /api/history/:id    : 存在しないIDで 404 を返すこと
  *   - GET /api/history/:id    : 非UUID形式のIDで 400 を返すこと（H1/L1対応）
@@ -28,7 +30,7 @@ import express from 'express'
 vi.mock('../../backend/src/services/historyDb', () => {
   return {
     getHistoryDb: vi.fn(() => ({})),
-    listConversations: vi.fn(),
+    listConversationsByDbConnectionId: vi.fn(),
     getConversationById: vi.fn(),
     deleteConversation: vi.fn(),
     listMessagesByConversationId: vi.fn(),
@@ -40,7 +42,7 @@ vi.mock('../../backend/src/services/historyDb', () => {
 // ---------------------------------------------------------------------------
 
 import {
-  listConversations,
+  listConversationsByDbConnectionId,
   getConversationById,
   deleteConversation,
   listMessagesByConversationId,
@@ -54,10 +56,13 @@ import {
 const TEST_CONV_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const TEST_MSG_UUID_1 = '550e8400-e29b-41d4-a716-446655440001'
 const TEST_MSG_UUID_2 = '550e8400-e29b-41d4-a716-446655440002'
+/** テスト用DB接続先UUID（UUID v4形式） */
+const TEST_DB_CONN_UUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 
-/** テスト用会話データ（DB の snake_case 形式） */
+/** テスト用会話データ（DB の snake_case 形式）- db_connection_id を含む */
 const mockConversationRow = {
   id: TEST_CONV_UUID,
+  db_connection_id: TEST_DB_CONN_UUID,
   title: '売上データを教えて',
   created_at: '2024-01-01T00:00:00.000Z',
   updated_at: '2024-01-01T01:00:00.000Z',
@@ -116,19 +121,19 @@ beforeEach(async () => {
  */
 describe('GET /api/history', () => {
   /**
-   * 【テスト対象】GET /api/history
-   * 【テスト内容】会話が存在する場合、camelCase 形式の配列が返ること
+   * 【テスト対象】GET /api/history?dbConnectionId=xxx（PBI #151 追加）
+   * 【テスト内容】有効な dbConnectionId を指定した場合、camelCase 形式の配列が返ること
    * 【期待結果】
    *   - ステータスコード 200
    *   - レスポンスが配列形式
    *   - id, title, createdAt, updatedAt が含まれること
    */
-  it('should return 200 with conversation list in camelCase format', async () => {
+  it('should return 200 with conversation list in camelCase format when valid dbConnectionId is specified', async () => {
     // Arrange
-    vi.mocked(listConversations).mockReturnValue([mockConversationRow])
+    vi.mocked(listConversationsByDbConnectionId).mockReturnValue([mockConversationRow])
 
     // Act
-    const res = await request(app).get('/api/history')
+    const res = await request(app).get(`/api/history?dbConnectionId=${TEST_DB_CONN_UUID}`)
 
     // Assert
     expect(res.status).toBe(200)
@@ -147,16 +152,47 @@ describe('GET /api/history', () => {
   })
 
   /**
-   * 【テスト対象】GET /api/history
+   * 【テスト対象】GET /api/history（dbConnectionId なし）（PBI #151 追加）
+   * 【テスト内容】dbConnectionId を指定しない場合、400 Bad Request が返ること
+   * 【期待結果】ステータスコード 400、エラーメッセージが含まれること
+   */
+  it('should return 400 when dbConnectionId is not specified', async () => {
+    // Act: dbConnectionId なしでリクエスト
+    const res = await request(app).get('/api/history')
+
+    // Assert
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeTruthy()
+    // DB へのアクセスが行われていないこと
+    expect(vi.mocked(listConversationsByDbConnectionId)).not.toHaveBeenCalled()
+  })
+
+  /**
+   * 【テスト対象】GET /api/history?dbConnectionId=invalid（PBI #151 追加）
+   * 【テスト内容】非UUID形式の dbConnectionId を指定した場合、400 Bad Request が返ること
+   * 【期待結果】ステータスコード 400、エラーメッセージが含まれること
+   */
+  it('should return 400 when dbConnectionId is not a valid UUID', async () => {
+    // Act: 非UUID形式の dbConnectionId
+    const res = await request(app).get('/api/history?dbConnectionId=not-a-valid-uuid')
+
+    // Assert
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeTruthy()
+    expect(vi.mocked(listConversationsByDbConnectionId)).not.toHaveBeenCalled()
+  })
+
+  /**
+   * 【テスト対象】GET /api/history?dbConnectionId=xxx
    * 【テスト内容】会話が存在しない場合、空配列が返ること
    * 【期待結果】ステータスコード 200、空配列
    */
-  it('should return 200 with empty array when no conversations exist', async () => {
+  it('should return 200 with empty array when no conversations exist for the db connection', async () => {
     // Arrange
-    vi.mocked(listConversations).mockReturnValue([])
+    vi.mocked(listConversationsByDbConnectionId).mockReturnValue([])
 
     // Act
-    const res = await request(app).get('/api/history')
+    const res = await request(app).get(`/api/history?dbConnectionId=${TEST_DB_CONN_UUID}`)
 
     // Assert
     expect(res.status).toBe(200)
@@ -164,21 +200,40 @@ describe('GET /api/history', () => {
   })
 
   /**
-   * 【テスト対象】GET /api/history
+   * 【テスト対象】GET /api/history?dbConnectionId=xxx
    * 【テスト内容】複数の会話が存在する場合、すべて返ること
    * 【期待結果】ステータスコード 200、件数が一致すること
    */
-  it('should return all conversations', async () => {
+  it('should return all conversations for the specified db connection', async () => {
     // Arrange
     const conv2 = { ...mockConversationRow, id: '550e8400-e29b-41d4-a716-446655440010', title: '2番目の質問' }
-    vi.mocked(listConversations).mockReturnValue([mockConversationRow, conv2])
+    vi.mocked(listConversationsByDbConnectionId).mockReturnValue([mockConversationRow, conv2])
 
     // Act
-    const res = await request(app).get('/api/history')
+    const res = await request(app).get(`/api/history?dbConnectionId=${TEST_DB_CONN_UUID}`)
 
     // Assert
     expect(res.status).toBe(200)
     expect(res.body).toHaveLength(2)
+  })
+
+  /**
+   * 【テスト対象】GET /api/history?dbConnectionId=xxx
+   * 【テスト内容】正しい dbConnectionId で listConversationsByDbConnectionId が呼ばれること
+   * 【期待結果】listConversationsByDbConnectionId に正しい UUID が渡されること
+   */
+  it('should call listConversationsByDbConnectionId with the correct dbConnectionId', async () => {
+    // Arrange
+    vi.mocked(listConversationsByDbConnectionId).mockReturnValue([])
+
+    // Act
+    await request(app).get(`/api/history?dbConnectionId=${TEST_DB_CONN_UUID}`)
+
+    // Assert
+    expect(vi.mocked(listConversationsByDbConnectionId)).toHaveBeenCalledWith(
+      expect.anything(),
+      TEST_DB_CONN_UUID
+    )
   })
 })
 
@@ -494,11 +549,11 @@ describe('Rate limiting (M1)', () => {
     limitedApp.use(express.json())
     limitedApp.use('/api/history', historyRouter)
 
-    vi.mocked(listConversations).mockReturnValue([])
+    vi.mocked(listConversationsByDbConnectionId).mockReturnValue([])
 
     // Act: 2回リクエスト（2回目は制限を超える）
-    await request(limitedApp).get('/api/history')
-    const secondRes = await request(limitedApp).get('/api/history')
+    await request(limitedApp).get(`/api/history?dbConnectionId=${TEST_DB_CONN_UUID}`)
+    const secondRes = await request(limitedApp).get(`/api/history?dbConnectionId=${TEST_DB_CONN_UUID}`)
 
     // Assert: 2回目は 429
     expect(secondRes.status).toBe(429)
