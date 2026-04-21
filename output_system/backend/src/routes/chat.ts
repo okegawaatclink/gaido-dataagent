@@ -229,7 +229,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
       if (!existing) {
         // 指定IDが存在しない場合は新規会話として作成
         const title = message.trim().slice(0, 30)
-        const conv = createConversation(historyDb, { id: validatedConversationId, title })
+        const conv = createConversation(historyDb, { id: validatedConversationId, title, db_connection_id: dbConnectionId })
         activeConversationId = conv.id
         // SSE で conversationId をクライアントに通知
         // フロントエンドの useChat が data.conversationId として参照するため、フィールド名を統一する
@@ -244,7 +244,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     } else {
       // 新規会話: ユーザー発話の先頭30文字をタイトルとして自動生成
       const title = message.trim().slice(0, 30)
-      const conv = createConversation(historyDb, { id: uuidv4(), title })
+      const conv = createConversation(historyDb, { id: uuidv4(), title, db_connection_id: dbConnectionId })
       activeConversationId = conv.id
       // SSE で conversationId をクライアントに通知（フロントエンドが次回以降に使用）
       // フィールド名は conversationId で統一する（フロントエンドの useChat 参照先と一致）

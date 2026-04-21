@@ -5,7 +5,7 @@
  * 自然言語の質問を入力して送信するためのUI。
  *
  * 操作:
- * - Enter キー: 送信（Shift+Enter は改行）
+ * - Shift+Enter キー: 送信（Enter は改行）
  * - 送信ボタンクリック: 送信
  * - ローディング中は入力フィールドと送信ボタンを無効化
  *
@@ -36,7 +36,7 @@ const PLACEHOLDER = '自然言語で質問を入力してください（例: 今
  * チャット入力フォームコンポーネント
  *
  * テキストエリアと送信ボタンで構成される。
- * Enter: 送信、Shift+Enter: 改行
+ * Shift+Enter: 送信、Enter: 改行
  *
  * @param props - ChatInputProps
  */
@@ -75,17 +75,17 @@ const ChatInput: FC<ChatInputProps> = ({
 
   /**
    * キーボードイベントハンドラ
-   * - Enter のみ: 送信
-   * - Shift+Enter: 改行（デフォルト動作に任せる）
+   * - Shift+Enter: 送信
+   * - Enter のみ: 改行（デフォルト動作に任せる）
    */
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        // Enterのみ押下時はフォームデフォルト動作（改行）を阻止して送信
+      if (e.key === 'Enter' && e.shiftKey) {
+        // Shift+Enter押下時はフォームデフォルト動作（改行）を阻止して送信
         e.preventDefault()
         handleSubmit()
       }
-      // Shift+Enter は e.preventDefault() を呼ばずにデフォルト改行を許可
+      // Enter のみは e.preventDefault() を呼ばずにデフォルト改行を許可
     },
     [handleSubmit],
   )
@@ -112,7 +112,7 @@ const ChatInput: FC<ChatInputProps> = ({
         disabled={isDisabled || !inputText.trim()}
         type="button"
         aria-label="送信"
-        title={isLoading ? '応答待ち中...' : 'Enterで送信（Shift+Enterで改行）'}
+        title={isLoading ? '応答待ち中...' : 'Shift+Enterで送信（Enterで改行）'}
       >
         {isLoading ? (
           // ローディング中はスピナーアイコン
@@ -125,7 +125,7 @@ const ChatInput: FC<ChatInputProps> = ({
 
       {/* キーボード操作のヒント */}
       <p className="chat-input-hint" aria-live="off">
-        Enter で送信 / Shift+Enter で改行
+        Shift+Enter で送信 / Enter で改行
       </p>
     </div>
   )
