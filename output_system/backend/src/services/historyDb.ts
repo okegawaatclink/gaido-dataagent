@@ -1,12 +1,15 @@
 /**
  * 会話履歴用 SQLite データベース初期化・マイグレーションモジュール
  *
- * DataAgent の内部DB（クエリ履歴管理）を better-sqlite3 で管理する。
- * 外部ユーザーDBとは分離された専用DBで、会話・メッセージの永続化を担う。
+ * DataAgent の内部DB（DB接続先管理・クエリ履歴管理）を better-sqlite3 で管理する。
+ * 外部ユーザーDBとは分離された専用DBで、DB接続先・会話・メッセージの永続化を担う。
  *
  * テーブル構成 (db.md ER図準拠):
- *   conversations - 会話セッション（id, title, created_at, updated_at）
- *   messages      - 個別メッセージ（id, conversation_id, role, content, sql, chart_type, query_result, error, created_at）
+ *   db_connections - DB接続先管理（id, name, db_type, host, port, username, password_encrypted,
+ *                    database_name, is_last_used, created_at, updated_at）
+ *   conversations  - 会話セッション（id, db_connection_id FK, title, created_at, updated_at）
+ *   messages       - 個別メッセージ（id, conversation_id FK, role, content, sql, chart_type,
+ *                    query_result, error, analysis, created_at）
  *
  * 環境変数:
  *   HISTORY_DB_PATH : SQLite ファイルパス（デフォルト: /app/data/history.sqlite）
@@ -15,6 +18,13 @@
  *   - DBファイルは .gitignore 対象（data/ ディレクトリ除外）
  *   - Docker named volume でデータを永続化（docker-compose.yml 参照）
  *   - WAL モードで書き込みパフォーマンスを最適化
+ *   - password_encrypted はAES-256-GCM暗号化済み（平文で保存しない）
+ *
+ * マイグレーション方針:
+ *   - 既存のSQLiteデータベースは再作成する（既存の会話履歴は破棄許可済み）
+ *   - db_connectionsテーブルを新規作成
+ *   - conversationsテーブルにdb_connection_idカラムを追加（FK → db_connections.id）
+ *   - 外部キー制約: conversations.db_connection_id → db_connections.id (ON DELETE CASCADE)
  *
  * 参考:
  *   - https://github.com/wiselibs/better-sqlite3/blob/master/README.md
@@ -30,10 +40,35 @@ import fs from 'fs'
 // ---------------------------------------------------------------------------
 
 /**
+ * db_connections テーブルのレコード型（DBから取得した生データ）
+ *
+ * password_encrypted には AES-256-GCM で暗号化されたパスワードが格納される。
+ * 平文パスワードは保存しないこと。
+ */
+export interface DbConnectionRow {
+  id: string
+  name: string
+  db_type: string
+  host: string
+  port: number
+  username: string
+  password_encrypted: string
+  database_name: string
+  is_last_used: number  // SQLite では BOOLEAN は INTEGER（0/1）として保存
+  created_at: string
+  updated_at: string
+}
+
+/**
  * conversations テーブルのレコード型（DBから取得した生データ）
+ *
+ * db_connection_id は DB接続先との FK（ON DELETE CASCADE）。
+ * db.md の変更に伴い db_connection_id カラムを追加。
+ * 後続PBI #147 でDB接続先管理が実装されるまでは NULL が格納される場合がある。
  */
 export interface ConversationRow {
   id: string
+  db_connection_id: string | null
   title: string
   created_at: string
   updated_at: string
@@ -72,9 +107,14 @@ export interface CreateMessageParams {
 
 /**
  * conversation 作成時の入力パラメータ型
+ *
+ * db_connection_id: DB接続先ID（FK → db_connections.id）。
+ *   後続PBI #147 でDB接続先管理が実装されるまでは省略可能（NULL が格納される）。
+ *   後続PBIで必須フィールドに変更予定。
  */
 export interface CreateConversationParams {
   id: string
+  db_connection_id?: string | null
   title: string
 }
 
@@ -156,36 +196,97 @@ export function initHistoryDb(dbPath?: string): Database.Database {
 /**
  * テーブルマイグレーションを実行する
  *
- * CREATE TABLE IF NOT EXISTS でべき等に実行可能。
- * 起動時に毎回呼ばれるが、テーブルが既存の場合はスキップされる。
+ * マイグレーション方針 (ai_generated/requirements/db.md 参照):
+ *   - 既存のSQLiteデータベースは「再作成」する（既存の会話履歴は破棄許可済み）
+ *   - db_connectionsテーブルを新規追加
+ *   - conversationsテーブルにdb_connection_idカラムを追加（FK → db_connections.id）
+ *   - 外部キー制約: conversations.db_connection_id → db_connections.id (ON DELETE CASCADE)
+ *
+ * 再作成の理由:
+ *   既存の conversations テーブルには db_connection_id カラムがなく、
+ *   SQLite の ALTER TABLE では FK 付きカラムを追加できないため、
+ *   テーブルを DROP して再作成する方式を採用する。
  *
  * テーブル仕様は ai_generated/requirements/db.md のER図に準拠。
  *
  * @param db - 初期化済みの Database インスタンス
  */
 function runMigrations(db: Database.Database): void {
-  // conversations テーブル（会話セッション）
+  // ===========================================================================
+  // 既存テーブルを削除して再作成（db.md マイグレーション方針に従う）
+  // ===========================================================================
+  // 削除順序: FK 制約の関係で子テーブルから先に削除する
+  // messages → conversations → db_connections の順に DROP
+  //
+  // 注意: ON DELETE CASCADE が有効でも、DROP TABLE 時は CASCADE は適用されない。
+  // 子テーブルを先に DROP することで FK 制約違反エラーを回避する。
+
+  db.exec(`DROP TABLE IF EXISTS messages`)
+  db.exec(`DROP TABLE IF EXISTS conversations`)
+  db.exec(`DROP TABLE IF EXISTS db_connections`)
+
+  // ===========================================================================
+  // db_connections テーブル（DB接続先管理）[新規追加]
+  // ===========================================================================
   // - id: UUID（クライアント側で生成）
+  // - name: 接続名（表示用）。UNIQUE 制約で重複を防ぐ
+  // - db_type: 'mysql' または 'postgresql'
+  // - host: ホスト名
+  // - port: ポート番号
+  // - username: DBユーザー名
+  // - password_encrypted: AES-256-GCM で暗号化されたパスワード（平文は保存しない）
+  // - database_name: 接続先DBの名前
+  // - is_last_used: 最後に使用したDB フラグ（0/1）。SQLite では BOOLEAN を INTEGER で表現
+  // - created_at / updated_at: ISO 8601 文字列で保存
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS db_connections (
+      id                 TEXT     NOT NULL PRIMARY KEY,
+      name               TEXT     NOT NULL UNIQUE,
+      db_type            TEXT     NOT NULL CHECK(db_type IN ('mysql', 'postgresql')),
+      host               TEXT     NOT NULL,
+      port               INTEGER  NOT NULL,
+      username           TEXT     NOT NULL,
+      password_encrypted TEXT     NOT NULL,
+      database_name      TEXT     NOT NULL,
+      is_last_used       INTEGER  NOT NULL DEFAULT 0,
+      created_at         DATETIME NOT NULL,
+      updated_at         DATETIME NOT NULL
+    )
+  `)
+
+  // ===========================================================================
+  // conversations テーブル（会話セッション）[db_connection_id を追加]
+  // ===========================================================================
+  // - id: UUID（クライアント側で生成）
+  // - db_connection_id: FK → db_connections.id（ON DELETE CASCADE）
+  //   接続先DBが削除されると、その接続に紐づく会話も自動削除される。
+  //   NULL 許容（後続PBI #147 でDB接続先管理が実装されるまでの暫定措置）。
+  //   後続PBIでDB接続先管理が完成したら NOT NULL 制約を追加すること。
   // - title: 会話タイトル（最初のユーザー質問から自動生成）
   // - created_at / updated_at: ISO 8601 文字列で保存
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
-      id         TEXT     NOT NULL PRIMARY KEY,
-      title      TEXT     NOT NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL
+      id                TEXT     NOT NULL PRIMARY KEY,
+      db_connection_id  TEXT     REFERENCES db_connections(id) ON DELETE CASCADE,
+      title             TEXT     NOT NULL,
+      created_at        DATETIME NOT NULL,
+      updated_at        DATETIME NOT NULL
     )
   `)
 
-  // messages テーブル（個別メッセージ）
+  // ===========================================================================
+  // messages テーブル（個別メッセージ）[変更なし]
+  // ===========================================================================
   // - id: UUID（クライアント側で生成）
-  // - conversation_id: FK → conversations.id（CASCADE削除）
+  // - conversation_id: FK → conversations.id（ON DELETE CASCADE）
+  //   会話が削除されると、そのメッセージも自動削除される
   // - role: 'user' または 'assistant'
   // - content: メッセージ本文
   // - sql: アシスタントが生成したSQL（ユーザーメッセージは NULL）
   // - chart_type: 推奨グラフ種別（bar/line/pie/table）
   // - query_result: クエリ結果JSON文字列（nullable）
   // - error: エラー内容（エラー発生時のみ）
+  // - analysis: AI分析コメント（クエリ結果の傾向・特徴）
   // - created_at: メッセージ作成日時
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -197,16 +298,14 @@ function runMigrations(db: Database.Database): void {
       chart_type      TEXT,
       query_result    TEXT,
       error           TEXT,
+      analysis        TEXT,
       created_at      DATETIME NOT NULL
     )
   `)
 
-  // マイグレーション: analysis カラムを追加（既存DBへの後方互換）
-  try {
-    db.exec(`ALTER TABLE messages ADD COLUMN analysis TEXT`)
-  } catch {
-    // カラムが既に存在する場合は無視（duplicate column name エラー）
-  }
+  // ===========================================================================
+  // インデックス
+  // ===========================================================================
 
   // インデックス: conversation_id での messages 検索を高速化
   db.exec(`
@@ -218,6 +317,12 @@ function runMigrations(db: Database.Database): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_conversations_updated_at
       ON conversations(updated_at DESC)
+  `)
+
+  // インデックス: db_connections の is_last_used での検索を高速化（最後に使用した接続を素早く取得）
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_db_connections_is_last_used
+      ON db_connections(is_last_used)
   `)
 }
 
@@ -280,13 +385,14 @@ export function closeHistoryDb(): void {
  * 会話を新規作成する
  *
  * @param db - Database インスタンス（省略時はシングルトン）
- * @param params - 作成パラメータ（id, title）
+ * @param params - 作成パラメータ（id, db_connection_id, title）
  * @returns 作成された ConversationRow
  *
  * @example
  * ```typescript
  * const conv = createConversation(db, {
  *   id: crypto.randomUUID(),
+ *   db_connection_id: 'some-db-connection-id',
  *   title: '売上データを教えて',
  * })
  * ```
@@ -297,11 +403,13 @@ export function createConversation(
 ): ConversationRow {
   const now = new Date().toISOString()
   const stmt = db.prepare(`
-    INSERT INTO conversations (id, title, created_at, updated_at)
-    VALUES (@id, @title, @created_at, @updated_at)
+    INSERT INTO conversations (id, db_connection_id, title, created_at, updated_at)
+    VALUES (@id, @db_connection_id, @title, @created_at, @updated_at)
   `)
   stmt.run({
     id: params.id,
+    // db_connection_id が省略された場合は NULL を格納する（後続PBIで必須化予定）
+    db_connection_id: params.db_connection_id ?? null,
     title: params.title,
     created_at: now,
     updated_at: now,
@@ -337,7 +445,7 @@ export function updateConversationTimestamp(
  */
 export function listConversations(db: Database.Database): ConversationRow[] {
   const stmt = db.prepare(`
-    SELECT id, title, created_at, updated_at
+    SELECT id, db_connection_id, title, created_at, updated_at
     FROM conversations
     ORDER BY updated_at DESC
   `)
@@ -356,7 +464,7 @@ export function getConversationById(
   id: string
 ): ConversationRow | undefined {
   const stmt = db.prepare(`
-    SELECT id, title, created_at, updated_at
+    SELECT id, db_connection_id, title, created_at, updated_at
     FROM conversations
     WHERE id = ?
   `)
@@ -439,7 +547,7 @@ export function getMessageById(
   id: string
 ): MessageRow | undefined {
   const stmt = db.prepare(`
-    SELECT id, conversation_id, role, content, sql, chart_type, query_result, error, created_at
+    SELECT id, conversation_id, role, content, sql, chart_type, query_result, error, analysis, created_at
     FROM messages
     WHERE id = ?
   `)
@@ -460,10 +568,179 @@ export function listMessagesByConversationId(
   conversationId: string
 ): MessageRow[] {
   const stmt = db.prepare(`
-    SELECT id, conversation_id, role, content, sql, chart_type, query_result, error, created_at
+    SELECT id, conversation_id, role, content, sql, chart_type, query_result, error, analysis, created_at
     FROM messages
     WHERE conversation_id = ?
     ORDER BY created_at ASC
   `)
   return stmt.all(conversationId) as MessageRow[]
+}
+
+// ---------------------------------------------------------------------------
+// Repository: db_connections
+// ---------------------------------------------------------------------------
+
+/**
+ * DB接続先を新規作成する
+ *
+ * password は必ず暗号化済みのものを渡すこと（平文パスワードは保存しない）。
+ * AES-256-GCM 暗号化は呼び出し元（config サービス等）が担当する。
+ *
+ * @param db - Database インスタンス
+ * @param params - 作成パラメータ
+ * @returns 作成された DbConnectionRow
+ *
+ * @example
+ * ```typescript
+ * const conn = createDbConnection(db, {
+ *   id: uuidv4(),
+ *   name: '本番DB',
+ *   db_type: 'postgresql',
+ *   host: 'db.example.com',
+ *   port: 5432,
+ *   username: 'readonly_user',
+ *   password_encrypted: encryptedPassword,
+ *   database_name: 'production',
+ * })
+ * ```
+ */
+export function createDbConnection(
+  db: Database.Database,
+  params: {
+    id: string
+    name: string
+    db_type: string
+    host: string
+    port: number
+    username: string
+    password_encrypted: string
+    database_name: string
+  }
+): DbConnectionRow {
+  const now = new Date().toISOString()
+  const stmt = db.prepare(`
+    INSERT INTO db_connections (
+      id, name, db_type, host, port, username, password_encrypted,
+      database_name, is_last_used, created_at, updated_at
+    ) VALUES (
+      @id, @name, @db_type, @host, @port, @username, @password_encrypted,
+      @database_name, 0, @created_at, @updated_at
+    )
+  `)
+  stmt.run({
+    id: params.id,
+    name: params.name,
+    db_type: params.db_type,
+    host: params.host,
+    port: params.port,
+    username: params.username,
+    password_encrypted: params.password_encrypted,
+    database_name: params.database_name,
+    created_at: now,
+    updated_at: now,
+  })
+  return getDbConnectionById(db, params.id)!
+}
+
+/**
+ * 指定IDのDB接続先を取得する
+ *
+ * @param db - Database インスタンス
+ * @param id - 取得するDB接続先ID
+ * @returns DbConnectionRow（存在しない場合は undefined）
+ */
+export function getDbConnectionById(
+  db: Database.Database,
+  id: string
+): DbConnectionRow | undefined {
+  const stmt = db.prepare(`
+    SELECT id, name, db_type, host, port, username, password_encrypted,
+           database_name, is_last_used, created_at, updated_at
+    FROM db_connections
+    WHERE id = ?
+  `)
+  return stmt.get(id) as DbConnectionRow | undefined
+}
+
+/**
+ * DB接続先一覧を取得する（name 昇順）
+ *
+ * @param db - Database インスタンス
+ * @returns DbConnectionRow の配列（name 昇順）
+ */
+export function listDbConnections(db: Database.Database): DbConnectionRow[] {
+  const stmt = db.prepare(`
+    SELECT id, name, db_type, host, port, username, password_encrypted,
+           database_name, is_last_used, created_at, updated_at
+    FROM db_connections
+    ORDER BY name ASC
+  `)
+  return stmt.all() as DbConnectionRow[]
+}
+
+/**
+ * 指定IDのDB接続先を削除する
+ *
+ * conversations テーブルには ON DELETE CASCADE が設定されているため、
+ * db_connections のレコードを削除すると関連 conversations および messages も自動削除される。
+ *
+ * @param db - Database インスタンス
+ * @param id - 削除するDB接続先ID
+ * @returns 削除された行数（0 の場合は対象が存在しなかった）
+ */
+export function deleteDbConnection(db: Database.Database, id: string): number {
+  const stmt = db.prepare(`DELETE FROM db_connections WHERE id = ?`)
+  const result = stmt.run(id)
+  return result.changes
+}
+
+/**
+ * 最後に使用したDB接続先を取得する
+ *
+ * is_last_used = 1 のレコードを取得する。
+ * 複数ある場合は updated_at が最新のものを返す。
+ *
+ * @param db - Database インスタンス
+ * @returns DbConnectionRow（存在しない場合は undefined）
+ */
+export function getLastUsedDbConnection(
+  db: Database.Database
+): DbConnectionRow | undefined {
+  const stmt = db.prepare(`
+    SELECT id, name, db_type, host, port, username, password_encrypted,
+           database_name, is_last_used, created_at, updated_at
+    FROM db_connections
+    WHERE is_last_used = 1
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `)
+  return stmt.get() as DbConnectionRow | undefined
+}
+
+/**
+ * 指定のDB接続先を「最後に使用した」としてマークする
+ *
+ * 他の接続先の is_last_used をすべて 0 にリセットした後、
+ * 指定IDの接続先を is_last_used = 1 に設定する。
+ * トランザクションで atomically に実行する。
+ *
+ * @param db - Database インスタンス
+ * @param id - マークするDB接続先ID
+ */
+export function markDbConnectionAsLastUsed(
+  db: Database.Database,
+  id: string
+): void {
+  // トランザクションで atomically に実行（排他的な is_last_used 管理）
+  const tx = db.transaction(() => {
+    // すべての接続先の is_last_used を 0 にリセット
+    db.prepare(`UPDATE db_connections SET is_last_used = 0`).run()
+    // 指定IDの接続先を is_last_used = 1 に設定し updated_at を更新
+    db.prepare(`
+      UPDATE db_connections
+      SET is_last_used = 1, updated_at = @updated_at
+      WHERE id = @id
+    `).run({ id, updated_at: new Date().toISOString() })
+  })
+  tx()
 }
