@@ -12,6 +12,7 @@ import { initHistoryDb, closeHistoryDb } from './services/historyDb'
 import schemaRouter from './routes/schema'
 import chatRouter from './routes/chat'
 import historyRouter from './routes/history'
+import connectionsRouter from './routes/connections'
 
 const app = express()
 
@@ -82,6 +83,15 @@ app.use('/api/chat', chatRouter)
  * DELETE /api/history/:id - 会話削除（CASCADE で messages も削除）
  */
 app.use('/api/history', historyRouter)
+
+/**
+ * GET    /api/connections          - DB接続先一覧取得（パスワード非返却）
+ * POST   /api/connections          - DB接続先登録
+ * PUT    /api/connections/:id      - DB接続先更新
+ * DELETE /api/connections/:id      - DB接続先削除（CASCADE）
+ * POST   /api/connections/test     - 接続テスト
+ */
+app.use('/api/connections', connectionsRouter)
 
 /**
  * GET /api/health
