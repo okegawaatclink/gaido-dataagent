@@ -230,21 +230,26 @@ function setupErrorLlmMock(error: Error): void {
 // supertestでSSEレスポンスを取得するヘルパー
 // ---------------------------------------------------------------------------
 
+/** テスト用ダミーのDB接続先ID（UUID v4形式） */
+const TEST_DB_CONNECTION_ID = '550e8400-e29b-41d4-a716-446655440000'
+
 /**
  * supertestでSSEストリーミングレスポンスを取得する
  *
  * @param app - Expressアプリ
  * @param message - 送信するメッセージ
+ * @param dbConnectionId - DB接続先ID（デフォルト: TEST_DB_CONNECTION_ID）
  * @returns { status: number; text: string }
  */
 async function sendChatRequest(
   app: express.Express,
-  message: string
+  message: string,
+  dbConnectionId: string = TEST_DB_CONNECTION_ID
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const req = request(app)
       .post('/api/chat')
-      .send({ message })
+      .send({ message, dbConnectionId })
       .set('Accept', 'text/event-stream')
 
     let responseText = ''
@@ -640,7 +645,7 @@ describe('POST /api/chat', () => {
     // Act
     const res = await request(app)
       .post('/api/chat')
-      .send({ message: 'テスト', conversationId: longId })
+      .send({ message: 'テスト', conversationId: longId, dbConnectionId: TEST_DB_CONNECTION_ID })
 
     // Assert
     expect(res.status).toBe(400)
@@ -668,7 +673,7 @@ describe('POST /api/chat', () => {
     const res2 = await new Promise<{ status: number; text: string }>((resolve, reject) => {
       const req = request(app)
         .post('/api/chat')
-        .send({ message: 'テスト', conversationId: 'not-a-valid-uuid' })
+        .send({ message: 'テスト', conversationId: 'not-a-valid-uuid', dbConnectionId: TEST_DB_CONNECTION_ID })
         .set('Accept', 'text/event-stream')
 
       let responseText = ''
@@ -715,7 +720,7 @@ describe('POST /api/chat', () => {
     const res = await new Promise<{ status: number; text: string }>((resolve, reject) => {
       const req = request(app)
         .post('/api/chat')
-        .send({ message: 'テスト', conversationId: validUuid })
+        .send({ message: 'テスト', conversationId: validUuid, dbConnectionId: TEST_DB_CONNECTION_ID })
         .set('Accept', 'text/event-stream')
 
       let responseText = ''

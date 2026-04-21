@@ -1719,6 +1719,61 @@ body {
   opacity: 1;
 }
 
+/* =============================================================================
+ * DB接続先セレクター（ヘッダー）
+ * PBI #149 追加
+ * ============================================================================= */
+
+/**
+ * DB接続先選択ドロップダウン（ヘッダー右側）
+ * チャット送信時に使用するDB接続先を選択するためのセレクト要素
+ */
+.app-header__db-select {
+  background-color: rgba(255, 255, 255, 0.15);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  white-space: nowrap;
+  /* ドロップダウン矢印の色を白に調整 */
+  appearance: auto;
+  /* 最大幅を設定して長い接続名も収まるよう */
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-header__db-select:hover {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+.app-header__db-select option {
+  /* オプション要素はブラウザのデフォルトスタイルを使用 */
+  background-color: var(--color-primary);
+  color: white;
+}
+
+/* DB接続先未登録時の通知テキスト */
+.app-header__no-db-notice {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.8rem;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* DB接続先未選択時のチャット入力無効化通知 */
+.chat-input-no-db-notice {
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-style: italic;
+  margin-top: var(--spacing-xs);
+  text-align: center;
+}
+
 /* ローディングスピナー（DB接続先一覧のローディング表示用） */
 .loading-spinner {
   display: inline-block;

@@ -12,14 +12,19 @@
  * - conversationId を管理し、継続会話のリクエストに含める（PBI #13 Epic 4）
  * - 履歴復元は restoreConversation() ラッパー経由で行い、内部 setState を外部に公開しない
  *
+ * PBI #149 更新:
+ * - send() に dbConnectionId パラメータを追加（選択中のDB接続先ID）
+ * - POST /api/chat のリクエストボディに dbConnectionId を含める
+ *
  * SSEイベント仕様（api.md / chat.ts 準拠）:
+ *   event: conversation - 会話ID通知（conversationId プロパティ）※PBI #13 追加
  *   event: message      - テキストチャンク（chunk プロパティ）
  *   event: sql          - 生成SQL（sql プロパティ）
  *   event: chart_type   - グラフ種類（chartType プロパティ）
  *   event: result       - クエリ結果（columns / rows / chartType プロパティ）
+ *   event: analysis     - AI分析コメントチャンク（chunk プロパティ）
  *   event: error        - エラーメッセージ（message プロパティ）
  *   event: done         - ストリーム終了（データなし）
- *   event: conversation - 会話ID通知（conversationId プロパティ）※PBI #13 追加
  */
 
 import { useState, useCallback, useRef } from 'react'
@@ -165,12 +170,19 @@ export function useChat(): UseChatReturn {
    * 5. done イベントまたはエラーで isLoading を false に
    *
    * @param message - ユーザーが入力した質問テキスト
+   * @param dbConnectionId - 選択中のDB接続先ID（UUID）。PBI #149 で追加。
    */
   const send = useCallback(
-    async (message: string) => {
+    async (message: string, dbConnectionId: string) => {
       // 空メッセージは送信しない
       const trimmed = message.trim()
       if (!trimmed) return
+
+      // dbConnectionId が未設定の場合は送信しない（UI側でバリデーション済みのはずだが念のため）
+      if (!dbConnectionId) {
+        console.warn('[useChat] dbConnectionId is required but not provided')
+        return
+      }
 
       // 前のリクエストが進行中であれば中断
       if (abortControllerRef.current) {
@@ -193,8 +205,12 @@ export function useChat(): UseChatReturn {
 
       try {
         // SSEストリームを購読
-        // conversationId が存在する場合はリクエストボディに含めて継続会話を示す
-        const requestBody: Record<string, unknown> = { message: trimmed }
+        // dbConnectionId（PBI #149 追加）と conversationId をリクエストボディに含める
+        const requestBody: Record<string, unknown> = {
+          message: trimmed,
+          // 選択中のDB接続先ID（必須: バックエンドがスキーマ取得・クエリ実行に使用）
+          dbConnectionId,
+        }
         // 現在の conversationId を閉じ込めるため、送信前に変数に取得する
         // （useState の値は非同期で古くなる場合があるため、ref を使う方が安全だが、
         //   SSE で conversationId を受け取るまで変化しないため useState で十分）

@@ -230,6 +230,9 @@ export interface UseDbConnectionsReturn {
  * - conversationId を追加（現在の会話ID。新規会話時は null）
  * - restoreConversation を追加（履歴復元用ラッパー関数）
  *
+ * PBI #149 更新:
+ * - send() が dbConnectionId を受け取るよう変更（選択中のDB接続先ID）
+ *
  * 設計原則:
  * - React.Dispatch 等の内部型は公開インターフェースに露出させない
  * - 外部から状態を変更する場合は意図が明確なラッパー関数（restoreConversation）を使用する
@@ -237,7 +240,7 @@ export interface UseDbConnectionsReturn {
  * @property messages             - 現在の会話のメッセージ一覧
  * @property isLoading            - LLMの応答待ち中かどうか（送信中〜done受信まで）
  * @property conversationId       - 現在の会話ID（バックエンドから受け取る。null = 新規会話）
- * @property send                 - 質問を送信する関数
+ * @property send                 - 質問を送信する関数（dbConnectionId が必須）
  * @property clearMessages        - 会話をリセットする関数（conversationId もリセット）
  * @property restoreConversation  - 履歴から会話を復元する関数（messages と conversationId を一括設定）
  */
@@ -245,7 +248,9 @@ export interface UseChatReturn {
   messages: ChatMessage[]
   isLoading: boolean
   conversationId: string | null
-  send: (message: string) => Promise<void>
+  /** @param message - ユーザーの質問テキスト */
+  /** @param dbConnectionId - 選択中のDB接続先ID（UUID）。必須。 */
+  send: (message: string, dbConnectionId: string) => Promise<void>
   clearMessages: () => void
   restoreConversation: (id: string, loadedMessages: ChatMessage[]) => void
 }

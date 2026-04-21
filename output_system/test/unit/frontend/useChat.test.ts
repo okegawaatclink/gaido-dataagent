@@ -100,9 +100,9 @@ describe('useChat', () => {
     ])
     const { result } = renderHook(() => useChat())
 
-    // Act: 質問を送信
+    // Act: 質問を送信（PBI #149: dbConnectionId が必須）
     await act(async () => {
-      await result.current.send('今月の売上を教えて')
+      await result.current.send('今月の売上を教えて', 'test-db-connection-id')
     })
 
     // Assert: ユーザーメッセージとアシスタントメッセージが追加されること
@@ -134,7 +134,7 @@ describe('useChat', () => {
 
     // Act
     await act(async () => {
-      await result.current.send('test')
+      await result.current.send('test', 'test-db-connection-id')
     })
 
     // Assert: チャンクが結合されていること
@@ -160,7 +160,7 @@ describe('useChat', () => {
 
     // Act
     await act(async () => {
-      await result.current.send('ユーザー一覧を教えて')
+      await result.current.send('ユーザー一覧を教えて', 'test-db-connection-id')
     })
 
     // Assert
@@ -189,7 +189,7 @@ describe('useChat', () => {
 
     // Act
     await act(async () => {
-      await result.current.send('ユーザー一覧を教えて')
+      await result.current.send('ユーザー一覧を教えて', 'test-db-connection-id')
     })
 
     // Assert
@@ -216,7 +216,7 @@ describe('useChat', () => {
 
     // Act
     await act(async () => {
-      await result.current.send('エラーを起こす質問')
+      await result.current.send('エラーを起こす質問', 'test-db-connection-id')
     })
 
     // Assert
@@ -241,7 +241,7 @@ describe('useChat', () => {
 
     // Act
     await act(async () => {
-      await result.current.send('test')
+      await result.current.send('test', 'test-db-connection-id')
     })
 
     // Assert
@@ -285,7 +285,7 @@ describe('useChat', () => {
 
     // Act
     await act(async () => {
-      await result.current.send('test')
+      await result.current.send('test', 'test-db-connection-id')
     })
 
     // Assert: conversationId が設定されること
@@ -307,7 +307,7 @@ describe('useChat', () => {
     ])
     const { result } = renderHook(() => useChat())
     await act(async () => {
-      await result.current.send('test')
+      await result.current.send('test', 'test-db-connection-id')
     })
     await waitFor(() => expect(result.current.messages).toHaveLength(2))
 
@@ -381,7 +381,7 @@ describe('useChat', () => {
 
     // Act
     await act(async () => {
-      await result.current.send('test')
+      await result.current.send('test', 'test-db-connection-id')
     })
 
     // Assert: エラーメッセージが設定されること

@@ -24,14 +24,18 @@ import Loading from '../common/Loading'
 /**
  * ChatContainer コンポーネントの Props
  *
- * @property messages   - 現在の会話のメッセージ一覧（App.tsx の useChat から渡す）
- * @property isLoading  - LLMの応答待ち中かどうか
- * @property onSend     - メッセージ送信ハンドラ
+ * @property messages              - 現在の会話のメッセージ一覧（App.tsx の useChat から渡す）
+ * @property isLoading             - LLMの応答待ち中かどうか
+ * @property onSend                - メッセージ送信ハンドラ
+ * @property isDbConnectionSelected - DB接続先が選択されているかどうか（PBI #149 追加）
+ *                                    false の場合はチャット入力を無効化する
  */
 interface ChatContainerProps {
   messages: ChatMessageType[]
   isLoading: boolean
   onSend: (message: string) => Promise<void>
+  /** DB接続先が選択されているかどうか（false = 未選択でチャット入力を無効化） */
+  isDbConnectionSelected?: boolean
 }
 
 /**
@@ -42,7 +46,12 @@ interface ChatContainerProps {
  *
  * @param props - ChatContainerProps
  */
-const ChatContainer: FC<ChatContainerProps> = ({ messages, isLoading, onSend }) => {
+const ChatContainer: FC<ChatContainerProps> = ({
+  messages,
+  isLoading,
+  onSend,
+  isDbConnectionSelected = true,
+}) => {
   // チャットエリアの最下部へのスクロール用 ref
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -72,19 +81,30 @@ const ChatContainer: FC<ChatContainerProps> = ({ messages, isLoading, onSend }) 
           <div className="chat-welcome">
             <div className="chat-welcome__icon" aria-hidden="true">🤖</div>
             <h2 className="chat-welcome__title">DataAgent へようこそ</h2>
-            <p className="chat-welcome__description">
-              自然言語でデータベースに質問できます。
-              <br />
-              SQLの知識がなくてもデータ分析が可能です。
-            </p>
-            <div className="chat-welcome__examples">
-              <p className="chat-welcome__examples-label">質問の例:</p>
-              <ul className="chat-welcome__examples-list">
-                <li>今月の売上トップ10を教えて</li>
-                <li>部門別の従業員数はいくつですか？</li>
-                <li>先週の注文数を日別に集計してください</li>
-              </ul>
-            </div>
+            {isDbConnectionSelected ? (
+              <>
+                <p className="chat-welcome__description">
+                  自然言語でデータベースに質問できます。
+                  <br />
+                  SQLの知識がなくてもデータ分析が可能です。
+                </p>
+                <div className="chat-welcome__examples">
+                  <p className="chat-welcome__examples-label">質問の例:</p>
+                  <ul className="chat-welcome__examples-list">
+                    <li>今月の売上トップ10を教えて</li>
+                    <li>部門別の従業員数はいくつですか？</li>
+                    <li>先週の注文数を日別に集計してください</li>
+                  </ul>
+                </div>
+              </>
+            ) : (
+              /* DB接続先未選択時の案内 */
+              <p className="chat-welcome__description" role="alert">
+                上部の「管理」ボタンからDB接続先を登録し、
+                <br />
+                接続先を選択してからチャットを開始してください。
+              </p>
+            )}
           </div>
         )}
 
@@ -106,7 +126,18 @@ const ChatContainer: FC<ChatContainerProps> = ({ messages, isLoading, onSend }) 
 
       {/* 入力エリア（下部固定） */}
       <div className="chat-input-wrapper">
-        <ChatInput onSend={onSend} isLoading={isLoading} />
+        {/* isDbConnectionSelected が false の場合は入力を無効化（PBI #149 追加） */}
+        <ChatInput
+          onSend={onSend}
+          isLoading={isLoading}
+          disabled={!isDbConnectionSelected}
+        />
+        {/* DB接続先未選択時の警告メッセージ */}
+        {!isDbConnectionSelected && (
+          <p className="chat-input-no-db-notice" role="alert" aria-live="polite">
+            DB接続先が選択されていません。ヘッダーから接続先を選択してください。
+          </p>
+        )}
       </div>
     </div>
   )

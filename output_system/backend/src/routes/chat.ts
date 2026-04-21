@@ -2,17 +2,23 @@
  * /api/chat ルート（SSE ストリーミング）
  *
  * 自然言語の質問を受け取り、以下の処理を順次行いSSEで結果をストリーミングする:
- *   1. DBスキーマ取得（services/schema.ts）
+ *   1. dbConnectionId から DBスキーマ取得（services/schema.ts / キャッシュ優先）
  *   2. Claude API でSQL・グラフ種別を生成（services/llm.ts）
  *   3. SQLバリデーション（services/sqlValidator.ts 経由 / database.executeQuery 内）
- *   4. SQL実行（services/database.ts）
+ *   4. SQL実行（services/database.ts / 指定DB接続先）
  *   5. 結果を SSE イベントとして送信
  *
+ * PBI #149 改修:
+ *   - リクエストボディから dbConnectionId を受け取り、スキーマ取得・クエリ実行に渡す
+ *   - dbConnectionId が未指定の場合は 400 エラーを返す
+ *
  * SSEイベント仕様（api.md参照）:
+ *   event: conversation - 会話ID通知（新規会話作成時）
  *   event: message  - LLMが生成したテキストチャンク（逐次送信）
  *   event: sql      - 抽出したSQL文
  *   event: chart_type - 推奨グラフ種別（bar/line/pie/table）
  *   event: result   - クエリ実行結果（QueryResult形式）
+ *   event: analysis - AI分析コメントチャンク（逐次送信）
  *   event: error    - エラーメッセージ
  *   event: done     - ストリーム終了（必ず最後に送信）
  *
@@ -25,7 +31,7 @@
 import { Router, Request, Response } from 'express'
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import { v4 as uuidv4, validate as uuidValidate } from 'uuid'
-import { fetchSchema } from '../services/schema'
+import { fetchSchema, ConnectionNotFoundError as SchemaConnectionNotFoundError } from '../services/schema'
 import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError, ConversationMessage } from '../services/llm'
 import { executeQuery, SqlValidationError } from '../services/database'
 import {
@@ -87,7 +93,7 @@ const chatRateLimiter = rateLimit({
  *   \n
  *
  * @param res - Express レスポンスオブジェクト
- * @param event - SSE イベント名（message/sql/chart_type/result/error/done）
+ * @param event - SSE イベント名（conversation/message/sql/chart_type/result/analysis/error/done）
  * @param data - 送信するデータ（JSON シリアライズ可能な値）
  */
 function sendSseEvent(res: Response, event: string, data: unknown): void {
@@ -105,9 +111,11 @@ function sendSseEvent(res: Response, event: string, data: unknown): void {
  * POST /api/chat
  *
  * リクエストボディ:
- *   { message: string, conversationId?: string }
- *
- *   message: 必須。2000文字以内。
+ *   {
+ *     message: string,           // 必須。2000文字以内。
+ *     dbConnectionId: string,    // 必須（PBI #149 追加）。DB接続先ID（UUID）。
+ *     conversationId?: string    // 任意。継続会話の場合に指定。
+ *   }
  *
  * レスポンス:
  *   Content-Type: text/event-stream（SSEストリーム）
@@ -116,7 +124,9 @@ function sendSseEvent(res: Response, event: string, data: unknown): void {
  * エラーハンドリング:
  *   - message 未設定: 400エラー（SSE開始前に返す）
  *   - message が2000文字超: 400エラー（SSE開始前に返す）
- *   - DB接続エラー: event: error 送信後 event: done
+ *   - dbConnectionId 未設定: 400エラー（SSE開始前に返す）
+ *   - DB接続先が見つからない: event: error 送信後 event: done
+ *   - DBスキーマ取得エラー: event: error 送信後 event: done
  *   - LLM設定エラー（APIキー未設定）: event: error 送信後 event: done
  *   - LLM APIエラー: event: error 送信後 event: done
  *   - SQLバリデーション失敗: event: error 送信後 event: done
@@ -126,8 +136,16 @@ function sendSseEvent(res: Response, event: string, data: unknown): void {
  *   - 内部エラー詳細（DBホスト名等）はサーバーログにのみ記録し、レスポンスには含めない
  */
 router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<void> => {
-  // リクエストボディから message と conversationId を取得
-  const { message, conversationId: reqConversationId } = req.body as { message?: string; conversationId?: string }
+  // リクエストボディから message、dbConnectionId、conversationId を取得
+  const {
+    message,
+    dbConnectionId,
+    conversationId: reqConversationId,
+  } = req.body as {
+    message?: string
+    dbConnectionId?: string
+    conversationId?: string
+  }
 
   // message のバリデーション（SSEヘッダー送信前に400で返す）
   if (!message || typeof message !== 'string' || message.trim() === '') {
@@ -137,6 +155,18 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
 
   if (message.length > MESSAGE_MAX_LENGTH) {
     res.status(400).json({ error: `message は ${MESSAGE_MAX_LENGTH} 文字以内で入力してください。` })
+    return
+  }
+
+  // dbConnectionId のバリデーション（PBI #149 追加: 必須フィールド）
+  if (!dbConnectionId || typeof dbConnectionId !== 'string' || dbConnectionId.trim() === '') {
+    res.status(400).json({ error: 'dbConnectionId フィールドは必須です。DB接続先を選択してください。' })
+    return
+  }
+
+  // UUID v4 形式チェック（不正なIDを早期に弾く）
+  if (!uuidValidate(dbConnectionId)) {
+    res.status(400).json({ error: 'dbConnectionId の形式が不正です。' })
     return
   }
 
@@ -235,15 +265,22 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
 
   try {
     // -----------------------------------------------------------------------
-    // Step 1: DBスキーマ取得
+    // Step 1: DBスキーマ取得（dbConnectionId 指定のDB接続先から、キャッシュ優先）
     // -----------------------------------------------------------------------
     let schema
     try {
-      schema = await fetchSchema()
+      // PBI #149: dbConnectionId を渡して指定DB接続先のスキーマを取得
+      schema = await fetchSchema(dbConnectionId)
     } catch (err) {
       // 内部エラー詳細はサーバーログに記録し、ユーザーには一般的なメッセージを返す
       console.error('[chat] fetchSchema error:', err)
-      sendSseEvent(res, 'error', { message: 'DBスキーマの取得に失敗しました。' })
+
+      // 接続先が見つからない場合は専用メッセージ
+      if (err instanceof SchemaConnectionNotFoundError) {
+        sendSseEvent(res, 'error', { message: '指定されたDB接続先が見つかりません。接続先設定を確認してください。' })
+      } else {
+        sendSseEvent(res, 'error', { message: 'DBスキーマの取得に失敗しました。接続先の設定とDB状態を確認してください。' })
+      }
       return
     }
 
@@ -344,7 +381,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     }
 
     // -----------------------------------------------------------------------
-    // Step 4: SQL バリデーション + クエリ実行
+    // Step 4: SQL バリデーション + クエリ実行（指定DB接続先で実行）
     // -----------------------------------------------------------------------
     if (!extractedSql) {
       // SQL が生成されなかった場合（通常は LlmParseError が先にスローされるはず）
@@ -357,7 +394,8 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     try {
       // executeQuery() 内で sqlValidator が呼ばれる（二重防御）
       // SELECT 以外のSQL は SqlValidationError をスロー
-      const queryResult = await executeQuery(extractedSql)
+      // PBI #149: dbConnectionId を渡して指定DB接続先でクエリを実行
+      const queryResult = await executeQuery(dbConnectionId, extractedSql)
 
       // クエリ結果を送信
       sendSseEvent(res, 'result', {
@@ -435,6 +473,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
  * @param chartType      - グラフ種別（nullable）
  * @param queryResult    - クエリ実行結果（nullable）
  * @param error          - エラーメッセージ（nullable）
+ * @param analysis       - AI分析コメント（nullable）
  */
 function _saveAssistantMessage(
   conversationId: string,
