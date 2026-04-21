@@ -116,6 +116,7 @@ npx playwright test test/e2e/app.spec.ts
 - **DataTableの日付フォーマット**: ISO 8601パターン（YYYY-MM-DD/YYYY-MM-DDTHH:mm:ss等）を正規表現で検出し、toLocaleDateString('ja-JP')でフォーマット。日付のみの場合はtimeZone: 'UTC'を指定してタイムゾーンのずれを防止
 - **コピー機能の実装**: Clipboard APIは`window.isSecureContext`が必要。HTTP環境（コンテナ名アクセス）では使えないため、execCommandフォールバックを用意した
 - **strict modeとPlaywright**: `page.locator()`は複数マッチするとstrict modeでエラーになる。`.first()`や`.filter()`で一意に絞ること
+- **db_connection_id のNULL許容設計**: SQLite本来のdb.md定義はNOT NULLだが、後続PBI（#147 DB接続先管理）が実装されるまでchat.ts側がdb_connection_idを知らないため暫定的にNULL許容とした。後続PBI実装時にNOT NULL化が必要
 
 ## はまりポイント
 
@@ -126,9 +127,11 @@ npx playwright test test/e2e/app.spec.ts
 - **vite preview にプロキシ機能なし**: `vite preview` は静的ファイルサービスのみ。`/api/xxx` の相対パスリクエストは同一オリジン（3001）に送られる。VITE_API_BASE_URL でバックエンドURLを明示するか、`vite.config.ts` の `preview.proxy` に `/api` を設定する
 - **better-sqlite3のNODE_MODULE_VERSION不一致**: Dockerビルド時、ホスト側でnpm installされた.nodeファイルがコンテナのNode.jsバージョンと合わない。`COPY output_system/ ./` の後に `RUN npm rebuild better-sqlite3` を実行すること
 - **E2EテストでSSEモックは実DBに書き込まない**: PlaywrightでGET /api/chatをモックしても実際のSQLiteには保存されない。GET /api/historyも合わせてモックしないと履歴が空のまま
+- **SQLite ALTER TABLEでのFK付きカラム追加不可**: SQLiteのALTER TABLE ADD COLUMNはFOREIGN KEY制約付きカラムを追加できない。テーブル再作成（DROP→CREATE）が必要。今回はdb.mdのマイグレーション方針（既存DB破棄許可）に従いDROP＆CREATE方式を採用
 
 ## 実装済み機能
 
+- PBI #145: Docker Composeでフロントエンド・バックエンドを一括起動できる（backend/src/config/index.ts・types/index.ts追加、.env.example にDB_ENCRYPTION_KEY追加）
 - PBI #5: Docker Composeで雛形アプリを起動できる（frontend/backend一括起動、ヘルスチェックAPI、E2Eテスト）
 - PBI #6: ユーザーDB(PostgreSQL/MySQL)へ接続確認できる（knex抽象化、GET /api/schema、INFORMATION_SCHEMAスキーマ取得、ユニットテスト）
 - PBI #7: SELECTのみ実行可能な安全なSQL実行基盤（sqlValidator.ts、database.executeQuery()、二重防御、ユニットテスト27件）
@@ -138,3 +141,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #11: テーブル形式で結果を参照・スクロール閲覧できる（DataTable本格実装、縦横スクロール/sticky header/ゼブラストライプ/NULL表示/数値右寄せ/日付フォーマット/コピー機能、ユニットテスト14件・E2Eテスト8件）
 - PBI #12: 会話・メッセージがSQLiteに保存される（better-sqlite3、historyDb.ts、Repository Pattern、GET/DELETE /api/history、conversationイベント追加、125件ユニットテスト）
 - PBI #13: サイドバーから履歴を閲覧・選択・削除できる（useHistory.ts、Sidebar/HistoryItem.tsx実装、App.tsx統合、自動リフレッシュ、検索フィルタ、E2Eテスト7件）
+- PBI #146: SQLiteが起動時に自動初期化される（db_connectionsテーブル追加、conversations.db_connection_id FK追加、Repository関数追加、180件ユニットテスト全通過）
