@@ -151,6 +151,8 @@ function buildDynamicKnex(dbConnectionId: string): {
       user: conn.username,
       password: conn.password,
       database: conn.databaseName,
+      // MySQL: INFORMATION_SCHEMA のコメント情報を文字化けなく取得するために charset を指定
+      ...(conn.dbType === 'mysql' ? { charset: 'utf8mb4' } : {}),
     },
     // スキーマ取得専用のプール（最小限のコネクション）
     pool: { min: 0, max: 2 },
@@ -220,12 +222,15 @@ async function fetchSchemaMysql(
   db: KnexType,
   database: string
 ): Promise<SchemaInfo> {
+  // コメント情報を文字化けなく取得するために接続文字コードを明示的に設定
+  await db.raw('SET NAMES utf8mb4')
+
   const [rows] = await db.raw<[InformationSchemaColumn[]]>(`
     SELECT
       c.TABLE_NAME   AS table_name,
       t.TABLE_COMMENT AS table_comment,
       c.COLUMN_NAME  AS column_name,
-      c.DATA_TYPE    AS data_type,
+      c.COLUMN_TYPE  AS data_type,
       c.IS_NULLABLE  AS is_nullable,
       c.COLUMN_COMMENT AS column_comment
     FROM information_schema.COLUMNS c
