@@ -123,6 +123,7 @@ npx playwright test test/e2e/app.spec.ts
 - **useHistory dbConnectionId変更時の自動リフレッシュ**: `useHistory` にdbConnectionId引数を追加し、useEffectの依存配列に含めることでDB切替時に自動でAPI再呼び出しが発生する。null の場合は fetch を実行せず空配列を返す（DB未選択状態）
 - **GET /api/history の dbConnectionId 必須化**: PBI #151 で GET /api/history はdbConnectionIdクエリパラメータが必須になった。未指定時は400を返す。後続PBIで history API を使う場合は必ずdbConnectionIdを渡すこと
 - **DB切替時チャットクリアのref管理**: `prevDbConnectionIdRef` で前回値を保持し、null→最初のID（初回起動）ではなく、IDが実際に変わった場合（DB切替）のみ `clearMessages()` を呼ぶ設計。React.useEffectのクリーンアップとは異なる
+- **WelcomeGuide の条件分岐**: `connections.length === 0` のときのみ WelcomeGuide を表示し、それ以外はサイドバー+チャットエリアを表示する。モーダルで接続先を登録して `handleDbModalClose` が呼ばれると `fetchConnections()` で `connections` が更新され、React が再レンダリングして自動的にチャット画面に遷移する（モーダル閉だけで遷移するため、明示的なページ遷移コードは不要）
 
 ## はまりポイント
 
@@ -153,3 +154,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #149: 選択中DB接続先で自然言語SQL生成・実行ができる（schema.ts動的接続+メモリキャッシュ、database.ts接続プール管理、routes/schema.ts dbConnectionId必須化、routes/chat.ts dbConnectionId受け取り、App.tsx DB選択ドロップダウン、ChatContainer未選択時入力無効化、216件ユニットテスト全通過）
 - PBI #150: SQL実行結果をグラフ・テーブルで切り替え表示できる（ChartRenderer/BarChart/LineChart/PieChart/DataTable/chartUtils.ts実装済み確認。既存コンポーネントが正しく機能することを動作確認。160件ユニットテスト全通過）
 - PBI #151: DB切替時にサイドバー会話履歴がDB別フィルタリングされる（historyDb.tsにlistConversationsByDbConnectionId追加、GET /api/historyのdbConnectionId必須化、useHistory dbConnectionId引数対応・DB切替時自動リフレッシュ、HistoryItemにcreatedAt表示追加、App.tsxにDB切替時チャットクリア追加。384件ユニットテスト全通過）
+- PBI #152: DB接続先未登録時に初回起動ガイドが表示される（WelcomeGuide.tsx新規作成、App.tsxにconnections.length===0の条件分岐追加、global.cssにウェルカム画面スタイル追加）

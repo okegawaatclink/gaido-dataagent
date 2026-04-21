@@ -35,12 +35,19 @@
  *   - ヘッダー + サイドバー + メインエリアの3カラムレイアウト ✓
  *   - DB選択→サイドバー更新→チャット表示のフロー ✓
  *   - 全コンポーネント間の状態連携 ✓
+ *
+ * PBI #152 更新（初回起動ガイド）:
+ * - DB接続先が0件の場合にチャット画面の代わりに WelcomeGuide を表示
+ * - DB接続先が1件以上ある場合は通常のチャット画面を表示
+ * - WelcomeGuide の「DB接続先を登録する」ボタンで DB 管理モーダルを開く
+ * - DB登録してモーダルを閉じると connections が更新され、自動的にチャット画面に遷移する
  */
 
 import { useState, useCallback, useEffect, useRef, type FC } from 'react'
 import ChatContainer from './components/Chat/ChatContainer'
 import Sidebar from './components/Sidebar/Sidebar'
 import DbManagementModal from './components/DbManagement/DbManagementModal'
+import WelcomeGuide from './components/Welcome/WelcomeGuide'
 import { useChat } from './hooks/useChat'
 import { useHistory } from './hooks/useHistory'
 import { useDbConnections } from './hooks/useDbConnections'
@@ -319,28 +326,53 @@ const App: FC = () => {
         onClose={handleDbModalClose}
       />
 
-      {/* メインコンテンツ領域（サイドバー + チャットエリア） */}
+      {/*
+       * メインコンテンツ領域
+       *
+       * PBI #152: DB接続先の件数によって表示を切り替える
+       *   - 0件: WelcomeGuide（初回起動ガイド）を全幅で表示
+       *   - 1件以上: サイドバー + チャットエリアの通常レイアウトを表示
+       *
+       * connections が更新されると React が再レンダリングし、自動的に切り替わる。
+       * DB管理モーダルで接続先を登録して handleDbModalClose が呼ばれると
+       * fetchConnections() で connections が更新されるため、遷移がシームレスに行われる。
+       */}
       <div className="app-content">
-        {/* 左サイドバー（幅250px・screens.md準拠） */}
-        <Sidebar
-          conversations={conversations}
-          isLoading={historyLoading}
-          historyError={historyError}
-          activeConversationId={conversationId}
-          onNewChat={handleNewChat}
-          onSelectConversation={handleSelectConversation}
-          onHistoryRefresh={handleHistoryRefresh}
-        />
+        {connections.length === 0 ? (
+          /*
+           * DB接続先が0件の場合: 初回起動ガイドを表示（PBI #152）
+           * WelcomeGuide 内の「DB接続先を登録する」ボタンで DB 管理モーダルを開く。
+           * モーダルで接続先を登録して閉じると handleDbModalClose が呼ばれ、
+           * fetchConnections() で connections が更新されてチャット画面に遷移する。
+           */
+          <WelcomeGuide onOpenDbModal={() => setIsDbModalOpen(true)} />
+        ) : (
+          /*
+           * DB接続先が1件以上ある場合: 通常のチャット画面を表示
+           */
+          <>
+            {/* 左サイドバー（幅250px・screens.md準拠） */}
+            <Sidebar
+              conversations={conversations}
+              isLoading={historyLoading}
+              historyError={historyError}
+              activeConversationId={conversationId}
+              onNewChat={handleNewChat}
+              onSelectConversation={handleSelectConversation}
+              onHistoryRefresh={handleHistoryRefresh}
+            />
 
-        {/* チャットメインエリア */}
-        <main className="app-main" role="main" aria-label="チャットエリア">
-          <ChatContainer
-            messages={messages}
-            isLoading={isLoading}
-            onSend={handleSend}
-            isDbConnectionSelected={!!selectedDbConnectionId}
-          />
-        </main>
+            {/* チャットメインエリア */}
+            <main className="app-main" role="main" aria-label="チャットエリア">
+              <ChatContainer
+                messages={messages}
+                isLoading={isLoading}
+                onSend={handleSend}
+                isDbConnectionSelected={!!selectedDbConnectionId}
+              />
+            </main>
+          </>
+        )}
       </div>
     </div>
   )
