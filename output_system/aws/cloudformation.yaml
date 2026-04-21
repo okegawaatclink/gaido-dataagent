@@ -16,6 +16,12 @@ Parameters:
     Type: List<AWS::EC2::Subnet::Id>
     Description: At least 2 subnets in different AZs (for ALB)
 
+  AnthropicApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Anthropic Claude API key (direct API mode)
+
   DbEncryptionKey:
     Type: String
     NoEcho: true
@@ -416,10 +422,8 @@ Resources:
             - ContainerName: mysql
               Condition: HEALTHY
           Environment:
-            - Name: USE_BEDROCK
-              Value: 'true'
-            - Name: AWS_REGION
-              Value: !Ref AWS::Region
+            - Name: ANTHROPIC_API_KEY
+              Value: !Ref AnthropicApiKey
             - Name: DB_ENCRYPTION_KEY
               Value: !Ref DbEncryptionKey
             - Name: DB_TYPE

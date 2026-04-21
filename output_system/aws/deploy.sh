@@ -36,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     --region)        REGION="$2";              shift 2;;
     --vpc-id)        VPC_ID="$2";              shift 2;;
     --subnet-ids)    SUBNET_IDS="$2";          shift 2;;
+    --api-key)       ANTHROPIC_API_KEY="$2";   shift 2;;
     --stack-name)    STACK_NAME="$2";          shift 2;;
     --cpu)           TASK_CPU="$2";            shift 2;;
     --memory)        TASK_MEMORY="$2";         shift 2;;
@@ -49,6 +50,7 @@ while [[ $# -gt 0 ]]; do
       echo "Required:"
       echo "  --vpc-id          Existing VPC ID"
       echo "  --subnet-ids      Comma-separated subnet IDs (at least 2, different AZs)"
+      echo "  --api-key         Anthropic API key"
       echo ""
       echo "Optional:"
       echo "  --region          AWS region (default: ap-northeast-1)"
@@ -65,7 +67,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required params
-for var in VPC_ID SUBNET_IDS; do
+for var in VPC_ID SUBNET_IDS ANTHROPIC_API_KEY; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: --$(echo $var | tr '[:upper:]' '[:lower:]' | tr '_' '-') is required"
     exit 1
@@ -85,7 +87,7 @@ echo "VPC:        $VPC_ID"
 echo "Subnets:    $SUBNET_IDS"
 echo "ECR:        $ECR_URI"
 echo "CPU/Memory: ${TASK_CPU}/${TASK_MEMORY}"
-echo "LLM:        Amazon Bedrock (IAM auth)"
+echo "LLM:        Anthropic API (direct)"
 echo "============================================"
 
 # ---------------------------------------------------------------------------
@@ -138,6 +140,7 @@ aws cloudformation deploy \
   --parameter-overrides \
     VpcId="$VPC_ID" \
     SubnetIds="$SUBNET_IDS" \
+    AnthropicApiKey="$ANTHROPIC_API_KEY" \
     DbEncryptionKey="$DB_ENCRYPTION_KEY" \
     MysqlRootPassword="$MYSQL_ROOT_PASSWORD" \
     WebImageUri="${ECR_URI}:${IMAGE_TAG}" \
@@ -163,9 +166,7 @@ echo "DataAgent is deploying to ECS Fargate!"
 echo ""
 echo "Access URL: $ALB_DNS"
 echo ""
-echo "Note: LLM is powered by Amazon Bedrock (IAM auth)."
-echo "      Claude models are auto-enabled on first invoke."
-echo "      Anthropic models may require use case details on first use."
+echo "Note: LLM is powered by Anthropic Claude API (direct)."
 echo ""
 echo "Check service status:"
 echo "  aws ecs describe-services --cluster dataagent-cluster --services dataagent-service --region $REGION"
