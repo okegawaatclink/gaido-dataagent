@@ -511,6 +511,9 @@ Resources:
       LaunchType: FARGATE
       PlatformVersion: LATEST
       EnableExecuteCommand: true
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
