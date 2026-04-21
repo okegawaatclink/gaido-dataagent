@@ -205,6 +205,7 @@ const Sidebar: FC<SidebarProps> = ({
                 key={conv.id}
                 id={conv.id}
                 title={conv.title}
+                createdAt={conv.createdAt}
                 isActive={conv.id === activeConversationId}
                 onClick={onSelectConversation}
                 onDelete={deletingIds.has(conv.id) ? undefined : handleDelete}

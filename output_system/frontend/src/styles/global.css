@@ -285,12 +285,31 @@ body {
   flex-shrink: 0;
 }
 
+.history-item__content {
+  display: flex;
+  flex-direction: column;
+  flex: 1; /* コンテンツエリアが残りの幅を占める */
+  min-width: 0; /* flex 子要素のオーバーフロー省略のために必要 */
+  overflow: hidden;
+}
+
 .history-item__title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1; /* タイトルが残りの幅を占める */
-  min-width: 0; /* flex 子要素のオーバーフロー省略のために必要 */
+}
+
+/* 作成日時（PBI #151 追加: タイトル下に小さく表示） */
+.history-item__date {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* アクティブ状態の日付色（primary色に合わせて変更） */
+.history-item--active .history-item__date {
+  color: var(--color-primary);
+  opacity: 0.8;
 }
 
 /* 削除ボタン（通常は非表示、ホバー時に表示） */

@@ -453,6 +453,29 @@ export function listConversations(db: Database.Database): ConversationRow[] {
 }
 
 /**
+ * 指定DB接続先の会話一覧を updated_at 降順で取得する（DB別フィルタリング）
+ *
+ * PBI #151 追加: GET /api/history?dbConnectionId=xxx で使用する。
+ * 指定された dbConnectionId に紐づく会話のみを返す。
+ *
+ * @param db - Database インスタンス
+ * @param dbConnectionId - フィルタリングするDB接続先ID（UUID v4）
+ * @returns 指定DB接続先の ConversationRow の配列（updated_at 降順）
+ */
+export function listConversationsByDbConnectionId(
+  db: Database.Database,
+  dbConnectionId: string
+): ConversationRow[] {
+  const stmt = db.prepare(`
+    SELECT id, db_connection_id, title, created_at, updated_at
+    FROM conversations
+    WHERE db_connection_id = ?
+    ORDER BY updated_at DESC
+  `)
+  return stmt.all(dbConnectionId) as ConversationRow[]
+}
+
+/**
  * 指定IDの会話を取得する
  *
  * @param db - Database インスタンス（省略時はシングルトン）

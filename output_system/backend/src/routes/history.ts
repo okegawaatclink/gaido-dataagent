@@ -2,12 +2,16 @@
  * 会話履歴 API ルート
  *
  * SQLite に保存された会話・メッセージ履歴を取得・削除する RESTful エンドポイント。
- * フロントエンドの履歴サイドバー（PBI 4.2）が使用する。
+ * フロントエンドの履歴サイドバーが使用する。
  *
  * エンドポイント仕様 (api.md 参照):
- *   GET    /api/history         - 会話一覧（updated_at 降順）
- *   GET    /api/history/:id     - 会話詳細（messages 配列付き）
- *   DELETE /api/history/:id     - 会話削除（CASCADE で messages も削除）
+ *   GET    /api/history                    - 会話一覧（dbConnectionId クエリパラメータで DB 別フィルター）
+ *   GET    /api/history/:id               - 会話詳細（messages 配列付き）
+ *   DELETE /api/history/:id               - 会話削除（CASCADE で messages も削除）
+ *
+ * クエリパラメータ:
+ *   GET /api/history?dbConnectionId=xxx   - 指定DB接続先の会話のみ返す（UUID v4必須）
+ *   GET /api/history                      - dbConnectionId未指定時は 400 を返す（PBI #151 仕様）
  *
  * レスポンス形式:
  *   - DB の snake_case カラムを camelCase に変換して返す
@@ -16,6 +20,11 @@
  * セキュリティ:
  *   - id パラメータはそのまま SQL に渡さず、Repository 関数のプリペアドステートメントを使用
  *   - 存在しない id は 404 を返す（情報漏洩のない一定のエラーレスポンス）
+ *   - dbConnectionId クエリパラメータは UUID v4 形式バリデーション
+ *
+ * PBI #151 更新:
+ *   - GET /api/history に dbConnectionId クエリパラメータフィルターを追加
+ *   - dbConnectionId 未指定時は 400 Bad Request を返す
  */
 
 import { Router, Request, Response } from 'express'
@@ -23,7 +32,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import { validate as uuidValidate } from 'uuid'
 import {
   getHistoryDb,
-  listConversations,
+  listConversationsByDbConnectionId,
   getConversationById,
   deleteConversation,
   listMessagesByConversationId,
@@ -154,9 +163,14 @@ function toMessageResponse(row: MessageRow): MessageResponse {
 // ---------------------------------------------------------------------------
 
 /**
- * GET /api/history
+ * GET /api/history?dbConnectionId=xxx
  *
- * 全会話履歴を updated_at 降順で返す。
+ * 指定DB接続先の会話履歴を updated_at 降順で返す（PBI #151 追加）。
+ *
+ * クエリパラメータ:
+ *   dbConnectionId (必須): DB接続先のUUID（UUID v4形式）
+ *     - 未指定: 400 Bad Request
+ *     - 非UUID形式: 400 Bad Request
  *
  * レスポンス例:
  * ```json
@@ -170,13 +184,31 @@ function toMessageResponse(row: MessageRow): MessageResponse {
  * ]
  * ```
  *
- * @returns 200 - ConversationSummary の配列
+ * @param dbConnectionId - クエリパラメータ（UUID v4形式のDB接続先ID）
+ * @returns 200 - ConversationSummary の配列（指定DB接続先の会話のみ）
+ * @returns 400 - dbConnectionId 未指定または非UUID形式
  * @returns 500 - サーバーエラー
  */
-router.get('/', historyRateLimiter, (_req: Request, res: Response): void => {
+router.get('/', historyRateLimiter, (req: Request, res: Response): void => {
+  // dbConnectionId クエリパラメータを取得（必須）
+  const dbConnectionId = req.query['dbConnectionId'] as string | undefined
+
+  // dbConnectionId 未指定の場合は 400 Bad Request を返す
+  if (!dbConnectionId) {
+    res.status(400).json({ error: 'dbConnectionId クエリパラメータは必須です。' })
+    return
+  }
+
+  // UUID v4 形式バリデーション（非UUIDは 400 を返す）
+  if (!uuidValidate(dbConnectionId)) {
+    res.status(400).json({ error: 'dbConnectionId の形式が正しくありません。UUID v4 形式で指定してください。' })
+    return
+  }
+
   try {
     const db = getHistoryDb()
-    const rows = listConversations(db)
+    // 指定DB接続先の会話のみをフィルタリングして取得
+    const rows = listConversationsByDbConnectionId(db, dbConnectionId)
     const conversations: ConversationSummary[] = rows.map(toConversationSummary)
     res.json(conversations)
   } catch (err) {

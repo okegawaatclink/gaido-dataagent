@@ -26,6 +26,15 @@
  * - selectedDbConnectionId state で選択中のDB接続先IDを管理
  * - send() に dbConnectionId を渡すよう ChatContainer の onSend を更新
  * - 接続先が未選択の場合はチャット入力を無効化
+ *
+ * PBI #151 更新（DB別会話履歴管理）:
+ * - useHistory に selectedDbConnectionId を渡してDB別フィルタリングを有効化
+ * - DB切替時に useHistory の dbConnectionId が変わり自動で履歴がリフレッシュされる
+ * - DB切替時にチャットエリアをクリアして前DBの会話が残らないようにする
+ * - App.tsx 完了条件 (Task 4.1.4):
+ *   - ヘッダー + サイドバー + メインエリアの3カラムレイアウト ✓
+ *   - DB選択→サイドバー更新→チャット表示のフロー ✓
+ *   - 全コンポーネント間の状態連携 ✓
  */
 
 import { useState, useCallback, useEffect, useRef, type FC } from 'react'
@@ -54,15 +63,6 @@ const App: FC = () => {
     restoreConversation,
   } = useChat()
 
-  // 会話履歴（一覧取得・リフレッシュ）
-  const {
-    conversations,
-    isLoading: historyLoading,
-    error: historyError,
-    refreshHistory,
-    loadConversation,
-  } = useHistory()
-
   // DB接続先一覧（PBI #149 追加: 選択中DB接続先の管理）
   const { connections, fetchConnections } = useDbConnections()
 
@@ -74,14 +74,33 @@ const App: FC = () => {
    *
    * チャット送信時にバックエンドへ渡し、スキーマ取得・クエリ実行先を指定する。
    * null = 未選択（チャット入力が無効）
+   *
+   * PBI #151: useHistory に渡すことでDB別の会話履歴フィルタリングにも使用する
    */
   const [selectedDbConnectionId, setSelectedDbConnectionId] = useState<string | null>(null)
+
+  // 会話履歴（一覧取得・リフレッシュ）
+  // PBI #151: selectedDbConnectionId を渡してDB別にフィルタリングする
+  // DB切替時は useHistory 内の useEffect が自動で再実行されてサイドバーが更新される
+  const {
+    conversations,
+    isLoading: historyLoading,
+    error: historyError,
+    refreshHistory,
+    loadConversation,
+  } = useHistory(selectedDbConnectionId)
 
   /**
    * 前回の isLoading 値を保持するref
    * isLoading が true → false に変わった（送信完了）タイミングを検出するために使用
    */
   const prevIsLoadingRef = useRef<boolean>(false)
+
+  /**
+   * 前回の selectedDbConnectionId を保持するref
+   * 初回マウント時（null → 最初のID）とDB切替（ID → 別ID）を区別するために使用
+   */
+  const prevDbConnectionIdRef = useRef<string | null>(null)
 
   /**
    * 接続先一覧が変化したとき、選択中IDが存在しない場合はデフォルト選択する
@@ -106,6 +125,23 @@ const App: FC = () => {
     const defaultConnection = lastUsed ?? connections[0]
     setSelectedDbConnectionId(defaultConnection.id)
   }, [connections, selectedDbConnectionId])
+
+  /**
+   * DB接続先が切り替わったとき、チャットエリアをクリアする（PBI #151 追加）
+   *
+   * 異なるDB接続先を選択したとき（DB切替）に、現在表示中の会話をクリアする。
+   * これにより、前のDBの会話が新しいDBで表示され続けることを防ぐ。
+   *
+   * 初回マウント時（null → 最初のID の遷移）はクリアしない（起動直後にチャットを消さない）。
+   */
+  useEffect(() => {
+    const prevId = prevDbConnectionIdRef.current
+    // prevId が null でない場合（=初回選択ではなく、DB切替の場合）にチャットをクリア
+    if (prevId !== null && prevId !== selectedDbConnectionId) {
+      clearMessages()
+    }
+    prevDbConnectionIdRef.current = selectedDbConnectionId
+  }, [selectedDbConnectionId, clearMessages])
 
   /**
    * チャット送信完了後に履歴を自動リフレッシュする

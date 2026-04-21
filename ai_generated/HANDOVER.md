@@ -120,6 +120,9 @@ npx playwright test test/e2e/app.spec.ts
 - **schema.ts キャッシュ戦略**: `Map<dbConnectionId, SchemaInfo>` によるサーバー再起動まで有効のインメモリキャッシュを採用。TTLキャッシュやRedisは過剰のため不採用。接続先更新・削除時に `invalidateSchemaCache()` を呼んで整合性を確保する
 - **database.ts 接続プール管理**: `Map<dbConnectionId, KnexType>` で管理する接続プールを採用。同じ接続先への繰り返しクエリで接続コストを削減。スキーマ取得（schema.ts）は専用の短命インスタンスで都度接続・破棄する設計（スキーマは頻度低いため）
 - **Vitestのvi.clearAllMocks()とモジュールレベルMap**: `database.ts` はモジュールレベルの `connectionPool` Map を持つ。Vitestテストでは各テストで別の `dbConnectionId` を使用してプールの干渉を避けること。`destroyAllConnections()` を `afterEach` で呼んでもVitestのモジュールキャッシュ（未リビルド状態）では反映されない場合がある
+- **useHistory dbConnectionId変更時の自動リフレッシュ**: `useHistory` にdbConnectionId引数を追加し、useEffectの依存配列に含めることでDB切替時に自動でAPI再呼び出しが発生する。null の場合は fetch を実行せず空配列を返す（DB未選択状態）
+- **GET /api/history の dbConnectionId 必須化**: PBI #151 で GET /api/history はdbConnectionIdクエリパラメータが必須になった。未指定時は400を返す。後続PBIで history API を使う場合は必ずdbConnectionIdを渡すこと
+- **DB切替時チャットクリアのref管理**: `prevDbConnectionIdRef` で前回値を保持し、null→最初のID（初回起動）ではなく、IDが実際に変わった場合（DB切替）のみ `clearMessages()` を呼ぶ設計。React.useEffectのクリーンアップとは異なる
 
 ## はまりポイント
 
@@ -149,3 +152,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #148: DB管理モーダルからDB接続先を操作できる（useDbConnections hook、Toast/useToast、DbManagementModal/DbConnectionList/DbConnectionForm、App.tsxに「管理」ボタン追加、バリデーション・確認ダイアログ・Toastによる結果通知）
 - PBI #149: 選択中DB接続先で自然言語SQL生成・実行ができる（schema.ts動的接続+メモリキャッシュ、database.ts接続プール管理、routes/schema.ts dbConnectionId必須化、routes/chat.ts dbConnectionId受け取り、App.tsx DB選択ドロップダウン、ChatContainer未選択時入力無効化、216件ユニットテスト全通過）
 - PBI #150: SQL実行結果をグラフ・テーブルで切り替え表示できる（ChartRenderer/BarChart/LineChart/PieChart/DataTable/chartUtils.ts実装済み確認。既存コンポーネントが正しく機能することを動作確認。160件ユニットテスト全通過）
+- PBI #151: DB切替時にサイドバー会話履歴がDB別フィルタリングされる（historyDb.tsにlistConversationsByDbConnectionId追加、GET /api/historyのdbConnectionId必須化、useHistory dbConnectionId引数対応・DB切替時自動リフレッシュ、HistoryItemにcreatedAt表示追加、App.tsxにDB切替時チャットクリア追加。384件ユニットテスト全通過）

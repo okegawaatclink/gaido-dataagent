@@ -1,14 +1,16 @@
 /**
  * useHistory - 会話履歴管理フック
  *
- * GET /api/history で会話一覧を取得し、
+ * GET /api/history?dbConnectionId=xxx で会話一覧を取得し、
  * GET /api/history/:id で会話詳細を取得するカスタムフック。
  *
  * PBI #13 (Epic 4 - 履歴管理) で実装。
+ * PBI #151 更新: dbConnectionId パラメータに対応。DB接続先別に会話履歴を管理する。
  *
  * 設計方針:
  * - シンプルな useEffect + fetch パターンを採用（React Query は不使用）
- * - 履歴一覧の自動リフレッシュ（refreshHistory を外部から呼び出し可能）
+ * - dbConnectionId が変わると自動でリフレッシュ（useEffect の依存配列に含める）
+ * - 履歴一覧の手動リフレッシュ（refreshHistory を外部から呼び出し可能）
  * - 会話詳細の取得は loadConversation 関数で明示的に行う
  * - エラーハンドリング: API 失敗時は error state にメッセージを設定
  */
@@ -80,8 +82,8 @@ export interface UseHistoryReturn {
 // API URL
 // ---------------------------------------------------------------------------
 
-/** GET /api/history エンドポイント */
-const HISTORY_API_URL = buildApiUrl('/api/history')
+/** GET /api/history エンドポイントのベースURL */
+const HISTORY_API_BASE_URL = buildApiUrl('/api/history')
 
 // ---------------------------------------------------------------------------
 // 変換ヘルパー
@@ -129,12 +131,17 @@ function toFrontendMessage(msg: HistoryMessageResponse): ChatMessage {
 /**
  * 会話履歴を管理するカスタムフック
  *
- * マウント時に自動的に GET /api/history を呼び出して会話一覧を取得する。
- * refreshHistory を呼び出すことで一覧を再取得できる。
+ * dbConnectionId が変わると自動で GET /api/history?dbConnectionId=xxx を呼び出す。
+ * refreshHistory を呼び出すことで一覧を手動再取得できる。
  *
+ * PBI #151 追加: dbConnectionId パラメータでDB別に履歴をフィルタリングする。
+ * - dbConnectionId が null の場合は取得を行わず空配列を返す
+ * - dbConnectionId が変わると自動で再取得（DB切替時のサイドバー更新に使用）
+ *
+ * @param dbConnectionId - フィルタリングするDB接続先ID（null = 未選択）
  * @returns UseHistoryReturn
  */
-export function useHistory(): UseHistoryReturn {
+export function useHistory(dbConnectionId: string | null = null): UseHistoryReturn {
   /** 会話一覧（更新日時降順） */
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   /** 一覧取得中フラグ */
@@ -154,9 +161,18 @@ export function useHistory(): UseHistoryReturn {
 
   /**
    * 会話一覧を取得する副作用
-   * マウント時および refreshTrigger 変化時に実行される
+   * マウント時、refreshTrigger 変化時、dbConnectionId 変化時に実行される。
+   * dbConnectionId が null の場合は空配列をセットして終了する。
    */
   useEffect(() => {
+    // dbConnectionId が未選択の場合は取得しない（DB選択前の空状態）
+    if (!dbConnectionId) {
+      setConversations([])
+      setError(null)
+      setIsLoading(false)
+      return
+    }
+
     let isCancelled = false  // コンポーネントアンマウント後の state 更新を防ぐ
 
     const fetchHistory = async () => {
@@ -164,7 +180,9 @@ export function useHistory(): UseHistoryReturn {
       setError(null)
 
       try {
-        const response = await fetch(HISTORY_API_URL)
+        // dbConnectionId クエリパラメータを付与して API を呼び出す（PBI #151 追加）
+        const url = `${HISTORY_API_BASE_URL}?dbConnectionId=${encodeURIComponent(dbConnectionId)}`
+        const response = await fetch(url)
         if (!response.ok) {
           throw new Error(`履歴の取得に失敗しました (HTTP ${response.status})`)
         }
@@ -191,7 +209,7 @@ export function useHistory(): UseHistoryReturn {
     return () => {
       isCancelled = true
     }
-  }, [refreshTrigger])
+  }, [refreshTrigger, dbConnectionId])  // dbConnectionId が変わると自動リフレッシュ
 
   /**
    * 指定IDの会話詳細を取得してChatMessage配列に変換する
