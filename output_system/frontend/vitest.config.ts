@@ -25,6 +25,7 @@ export default defineConfig({
       provider: 'v8',
       // カバレッジ対象: フロントエンドの src 配下全体（hooks・components を含む）
       include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/main.tsx'],
       reporter: ['text', 'json', 'html'],
       // 80%以上のカバレッジを要求
       thresholds: {

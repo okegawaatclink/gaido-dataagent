@@ -14,10 +14,14 @@
  *   - listMessagesByConversationId(): 会話に紐づくメッセージ一覧を取得できること
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import {
   initHistoryDb,
+  getHistoryDbPath,
+  getHistoryDb,
+  setHistoryDbInstance,
+  closeHistoryDb,
   createConversation,
   listConversations,
   getConversationById,
@@ -413,5 +417,84 @@ describe('historyDb: messages Repository', () => {
   it('should return empty array for non-existent conversation', () => {
     const messages = listMessagesByConversationId(db, 'non-existent-conv')
     expect(messages).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getHistoryDbPath / getHistoryDb / setHistoryDbInstance / closeHistoryDb
+// ---------------------------------------------------------------------------
+
+describe('historyDb: getHistoryDbPath', () => {
+  const originalEnv = process.env
+
+  beforeEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  afterEach(() => {
+    process.env = originalEnv
+  })
+
+  /**
+   * 【テスト対象】getHistoryDbPath
+   * 【テスト内容】HISTORY_DB_PATH 環境変数が設定されている場合、その値が返ること
+   * 【期待結果】環境変数の値が返ること
+   */
+  it('should return HISTORY_DB_PATH when set', () => {
+    process.env.HISTORY_DB_PATH = '/custom/path/history.sqlite'
+    expect(getHistoryDbPath()).toBe('/custom/path/history.sqlite')
+  })
+
+  /**
+   * 【テスト対象】getHistoryDbPath
+   * 【テスト内容】HISTORY_DB_PATH が未設定の場合、デフォルトパスが返ること
+   * 【期待結果】'/app/data/history.sqlite' が返ること
+   */
+  it('should return default path when HISTORY_DB_PATH is not set', () => {
+    delete process.env.HISTORY_DB_PATH
+    expect(getHistoryDbPath()).toBe('/app/data/history.sqlite')
+  })
+})
+
+describe('historyDb: setHistoryDbInstance / getHistoryDb / closeHistoryDb', () => {
+  afterEach(() => {
+    // テスト間でシングルトンをリセット
+    try { closeHistoryDb() } catch { /* ignore */ }
+    setHistoryDbInstance(null)
+  })
+
+  /**
+   * 【テスト対象】setHistoryDbInstance
+   * 【テスト内容】インスタンスを注入した場合にそれが返ること
+   * 【期待結果】注入したインスタンスが getHistoryDb() から返ること
+   */
+  it('should return injected instance via getHistoryDb', () => {
+    const testDb = initHistoryDb(':memory:')
+    setHistoryDbInstance(testDb)
+    expect(getHistoryDb()).toBe(testDb)
+    testDb.close()
+  })
+
+  /**
+   * 【テスト対象】closeHistoryDb
+   * 【テスト内容】インスタンスが存在する場合にcloseされシングルトンがnullになること
+   * 【期待結果】close後にsetHistoryDbInstance(null)不要（内部でnull化される）
+   */
+  it('should close and nullify the instance', () => {
+    const testDb = initHistoryDb(':memory:')
+    setHistoryDbInstance(testDb)
+    closeHistoryDb()
+    // 再度 closeHistoryDb を呼んでもエラーにならない
+    closeHistoryDb()
+  })
+
+  /**
+   * 【テスト対象】closeHistoryDb
+   * 【テスト内容】インスタンスがnullの場合にエラーなく完了すること
+   * 【期待結果】エラーがスローされないこと
+   */
+  it('should not throw when instance is null', () => {
+    setHistoryDbInstance(null)
+    expect(() => closeHistoryDb()).not.toThrow()
   })
 })

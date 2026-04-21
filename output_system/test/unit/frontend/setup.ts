@@ -28,6 +28,14 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 // matchMedia スタブ
 // jsdom に matchMedia が未実装の場合、Recharts 等が参照するときにエラーになる可能性があるため stub を提供する。
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Element.prototype.scrollIntoView スタブ
+// ChatContainer が useEffect 内で scrollIntoView を呼ぶが、jsdom には未実装のためスタブを提供する。
+// ---------------------------------------------------------------------------
+if (typeof Element.prototype.scrollIntoView === 'undefined') {
+  Element.prototype.scrollIntoView = () => {}
+}
+
 if (typeof globalThis.matchMedia === 'undefined') {
   Object.defineProperty(globalThis, 'matchMedia', {
     writable: true,

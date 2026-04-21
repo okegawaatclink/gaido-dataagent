@@ -42,10 +42,10 @@ describe('buildSchemaInfo', () => {
    */
   it('should group columns by table name', () => {
     const rows = [
-      { table_name: 'users', column_name: 'id', data_type: 'integer', is_nullable: 'NO' },
-      { table_name: 'users', column_name: 'email', data_type: 'character varying', is_nullable: 'NO' },
-      { table_name: 'orders', column_name: 'id', data_type: 'integer', is_nullable: 'NO' },
-      { table_name: 'orders', column_name: 'user_id', data_type: 'integer', is_nullable: 'YES' },
+      { table_name: 'users', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
+      { table_name: 'users', table_comment: null, column_name: 'email', data_type: 'character varying', is_nullable: 'NO', column_comment: null },
+      { table_name: 'orders', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
+      { table_name: 'orders', table_comment: null, column_name: 'user_id', data_type: 'integer', is_nullable: 'YES', column_comment: null },
     ]
 
     const result = buildSchemaInfo('testdb', rows)
@@ -59,13 +59,13 @@ describe('buildSchemaInfo', () => {
 
     // orders テーブルのカラム
     expect(result.tables[0].columns).toHaveLength(2)
-    expect(result.tables[0].columns[0]).toEqual({ name: 'id', type: 'integer', nullable: false })
-    expect(result.tables[0].columns[1]).toEqual({ name: 'user_id', type: 'integer', nullable: true })
+    expect(result.tables[0].columns[0]).toEqual({ name: 'id', type: 'integer', nullable: false, comment: null })
+    expect(result.tables[0].columns[1]).toEqual({ name: 'user_id', type: 'integer', nullable: true, comment: null })
 
     // users テーブルのカラム
     expect(result.tables[1].columns).toHaveLength(2)
-    expect(result.tables[1].columns[0]).toEqual({ name: 'id', type: 'integer', nullable: false })
-    expect(result.tables[1].columns[1]).toEqual({ name: 'email', type: 'character varying', nullable: false })
+    expect(result.tables[1].columns[0]).toEqual({ name: 'id', type: 'integer', nullable: false, comment: null })
+    expect(result.tables[1].columns[1]).toEqual({ name: 'email', type: 'character varying', nullable: false, comment: null })
   })
 
   /**
@@ -75,7 +75,7 @@ describe('buildSchemaInfo', () => {
    */
   it('should map is_nullable "YES" to true', () => {
     const rows = [
-      { table_name: 'items', column_name: 'description', data_type: 'text', is_nullable: 'YES' },
+      { table_name: 'items', table_comment: null, column_name: 'description', data_type: 'text', is_nullable: 'YES', column_comment: null },
     ]
 
     const result = buildSchemaInfo('mydb', rows)
@@ -90,7 +90,7 @@ describe('buildSchemaInfo', () => {
    */
   it('should map is_nullable "NO" to false', () => {
     const rows = [
-      { table_name: 'items', column_name: 'id', data_type: 'integer', is_nullable: 'NO' },
+      { table_name: 'items', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
     ]
 
     const result = buildSchemaInfo('mydb', rows)
@@ -117,9 +117,9 @@ describe('buildSchemaInfo', () => {
    */
   it('should sort tables alphabetically', () => {
     const rows = [
-      { table_name: 'zebra_table', column_name: 'id', data_type: 'integer', is_nullable: 'NO' },
-      { table_name: 'alpha_table', column_name: 'id', data_type: 'integer', is_nullable: 'NO' },
-      { table_name: 'middle_table', column_name: 'id', data_type: 'integer', is_nullable: 'NO' },
+      { table_name: 'zebra_table', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
+      { table_name: 'alpha_table', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
+      { table_name: 'middle_table', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
     ]
 
     const result = buildSchemaInfo('sortdb', rows)
@@ -160,8 +160,8 @@ describe('fetchSchema', () => {
     process.env.DB_NAME = 'pgdb'
 
     const mockRows = [
-      { table_name: 'products', column_name: 'id', data_type: 'integer', is_nullable: 'NO' },
-      { table_name: 'products', column_name: 'name', data_type: 'text', is_nullable: 'YES' },
+      { table_name: 'products', table_comment: null, column_name: 'id', data_type: 'integer', is_nullable: 'NO', column_comment: null },
+      { table_name: 'products', table_comment: null, column_name: 'name', data_type: 'text', is_nullable: 'YES', column_comment: null },
     ]
 
     const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
@@ -196,8 +196,8 @@ describe('fetchSchema', () => {
     process.env.DB_NAME = 'mysqldb'
 
     const mockRows = [
-      { table_name: 'customers', column_name: 'customer_id', data_type: 'int', is_nullable: 'NO' },
-      { table_name: 'customers', column_name: 'first_name', data_type: 'varchar', is_nullable: 'YES' },
+      { table_name: 'customers', table_comment: null, column_name: 'customer_id', data_type: 'int', is_nullable: 'NO', column_comment: null },
+      { table_name: 'customers', table_comment: null, column_name: 'first_name', data_type: 'varchar', is_nullable: 'YES', column_comment: null },
     ]
 
     // MySQL の knex.raw は [rows, fields] のタプルを返す
@@ -213,8 +213,8 @@ describe('fetchSchema', () => {
     expect(result.database).toBe('mysqldb')
     expect(result.tables).toHaveLength(1)
     expect(result.tables[0].name).toBe('customers')
-    expect(result.tables[0].columns[0]).toEqual({ name: 'customer_id', type: 'int', nullable: false })
-    expect(result.tables[0].columns[1]).toEqual({ name: 'first_name', type: 'varchar', nullable: true })
+    expect(result.tables[0].columns[0]).toEqual({ name: 'customer_id', type: 'int', nullable: false, comment: null })
+    expect(result.tables[0].columns[1]).toEqual({ name: 'first_name', type: 'varchar', nullable: true, comment: null })
 
     // DATABASE() を含むSQLが実行されていること
     expect(mockRaw).toHaveBeenCalledOnce()
@@ -268,7 +268,7 @@ describe('fetchSchema', () => {
     process.env.DB_NAME = 'injecteddb'
 
     const mockRows = [
-      { table_name: 'test_table', column_name: 'col1', data_type: 'integer', is_nullable: 'NO' },
+      { table_name: 'test_table', table_comment: null, column_name: 'col1', data_type: 'integer', is_nullable: 'NO', column_comment: null },
     ]
     const mockRaw = vi.fn().mockResolvedValue({ rows: mockRows })
     const injectedDb = { raw: mockRaw } as any
