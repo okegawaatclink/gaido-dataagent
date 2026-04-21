@@ -241,19 +241,17 @@ Resources:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: bedrock-invoke
+        - PolicyName: ecs-exec
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                Resource:
-                  - 'arn:aws:bedrock:*::foundation-model/anthropic.*'
-                  - 'arn:aws:bedrock:*:*:inference-profile/us.anthropic.*'
-                  - 'arn:aws:bedrock:*:*:inference-profile/eu.anthropic.*'
-                  - 'arn:aws:bedrock:*:*:inference-profile/apac.anthropic.*'
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: '*'
 
   # ===========================================================================
   # ALB (Application Load Balancer)
@@ -512,6 +510,7 @@ Resources:
       DesiredCount: 1
       LaunchType: FARGATE
       PlatformVersion: LATEST
+      EnableExecuteCommand: true
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
