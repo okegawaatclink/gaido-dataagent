@@ -34,19 +34,21 @@ const mockSchema: SchemaInfo = {
   tables: [
     {
       name: 'orders',
+      comment: null,
       columns: [
-        { name: 'id', type: 'integer', nullable: false },
-        { name: 'customer_name', type: 'varchar', nullable: false },
-        { name: 'amount', type: 'numeric', nullable: true },
-        { name: 'created_at', type: 'timestamp', nullable: false },
+        { name: 'id', type: 'integer', nullable: false, comment: null },
+        { name: 'customer_name', type: 'varchar', nullable: false, comment: null },
+        { name: 'amount', type: 'numeric', nullable: true, comment: null },
+        { name: 'created_at', type: 'timestamp', nullable: false, comment: null },
       ],
     },
     {
       name: 'products',
+      comment: null,
       columns: [
-        { name: 'id', type: 'integer', nullable: false },
-        { name: 'name', type: 'varchar', nullable: false },
-        { name: 'price', type: 'numeric', nullable: true },
+        { name: 'id', type: 'integer', nullable: false, comment: null },
+        { name: 'name', type: 'varchar', nullable: false, comment: null },
+        { name: 'price', type: 'numeric', nullable: true, comment: null },
       ],
     },
   ],
@@ -597,6 +599,233 @@ describe('LlmService', () => {
       expect(userMessage).toContain('orders')
       expect(userMessage).toContain('products')
       expect(userMessage).toContain('テスト質問')
+    })
+
+    /**
+     * 【テスト対象】LlmService.generate()
+     * 【テスト内容】conversationHistory が渡された場合、messages配列に含まれること
+     * 【期待結果】user/assistant の履歴メッセージがAPI呼び出しに含まれること
+     */
+    it('should include conversationHistory in messages when provided', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key-sk-xxxx'
+
+      const textChunks = ['```json\n{"sql": "SELECT 1", "chart_type": "table"}\n```']
+
+      const service = new LlmService()
+      const streamSpy = vi.spyOn(service['client'].messages, 'stream').mockReturnValue(
+        createMockStream(textChunks) as ReturnType<typeof service['client']['messages']['stream']>
+      )
+
+      const conversationHistory = [
+        { role: 'user' as const, content: '売上を教えて' },
+        { role: 'assistant' as const, content: '売上データです', sql: 'SELECT SUM(amount) FROM orders' },
+        { role: 'user' as const, content: '日別にして' },
+      ]
+
+      for await (const _event of service.generate({
+        question: '日別にして',
+        schema: mockSchema,
+        conversationHistory,
+      })) {
+        // イベントを消費するだけ
+      }
+
+      const callArgs = streamSpy.mock.calls[0][0] as { messages: Array<{ role: string; content: string }> }
+      // 履歴3件 + 最新質問1件 = 4件のメッセージ
+      expect(callArgs.messages).toHaveLength(4)
+      // 最初のメッセージは履歴のuser
+      expect(callArgs.messages[0].role).toBe('user')
+      expect(callArgs.messages[0].content).toBe('売上を教えて')
+      // 2番目はassistant（SQLを含む）
+      expect(callArgs.messages[1].role).toBe('assistant')
+      expect(callArgs.messages[1].content).toContain('SELECT SUM(amount) FROM orders')
+      // 3番目は履歴のuser
+      expect(callArgs.messages[2].role).toBe('user')
+      expect(callArgs.messages[2].content).toBe('日別にして')
+      // 4番目は最新の質問（スキーマ情報付き）
+      expect(callArgs.messages[3].role).toBe('user')
+      expect(callArgs.messages[3].content).toContain('testdb')
+    })
+
+    /**
+     * 【テスト対象】LlmService.generate()
+     * 【テスト内容】assistant メッセージにSQLがない場合、contentのみが含まれること
+     * 【期待結果】SQLなしのアシスタントメッセージがcontent単体で含まれること
+     */
+    it('should handle assistant messages without sql in history', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key-sk-xxxx'
+
+      const textChunks = ['```json\n{"sql": "SELECT 1", "chart_type": "table"}\n```']
+
+      const service = new LlmService()
+      const streamSpy = vi.spyOn(service['client'].messages, 'stream').mockReturnValue(
+        createMockStream(textChunks) as ReturnType<typeof service['client']['messages']['stream']>
+      )
+
+      const conversationHistory = [
+        { role: 'user' as const, content: 'こんにちは' },
+        { role: 'assistant' as const, content: 'お手伝いします' },
+      ]
+
+      for await (const _event of service.generate({
+        question: 'テスト',
+        schema: mockSchema,
+        conversationHistory,
+      })) {
+        // イベントを消費するだけ
+      }
+
+      const callArgs = streamSpy.mock.calls[0][0] as { messages: Array<{ role: string; content: string }> }
+      // assistant メッセージが content のみであること（SQLなし）
+      expect(callArgs.messages[1].content).toBe('お手伝いします')
+      expect(callArgs.messages[1].content).not.toContain('json')
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // analyzeResults() のテスト（SDKモック使用）
+  // -----------------------------------------------------------------------
+
+  describe('analyzeResults()', () => {
+    /**
+     * 【テスト対象】LlmService.analyzeResults()
+     * 【テスト内容】正常系: テキストチャンクが yield されること
+     * 【期待結果】分析テキストがチャンクとして返ること
+     */
+    it('should yield text chunks from analysis stream', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key-sk-xxxx'
+
+      const analysisChunks = ['売上は', '前月比', '120%増加']
+
+      const service = new LlmService()
+      vi.spyOn(service['client'].messages, 'stream').mockReturnValue(
+        createMockStream(analysisChunks) as ReturnType<typeof service['client']['messages']['stream']>
+      )
+
+      const chunks: string[] = []
+      for await (const chunk of service.analyzeResults({
+        question: '今月の売上は？',
+        sql: 'SELECT SUM(amount) FROM orders',
+        columns: ['total'],
+        rows: [{ total: 1000000 }],
+      })) {
+        chunks.push(chunk)
+      }
+
+      expect(chunks).toEqual(['売上は', '前月比', '120%増加'])
+    })
+
+    /**
+     * 【テスト対象】LlmService.analyzeResults()
+     * 【テスト内容】50件を超える行データの場合に切り詰めノートが付くこと
+     * 【期待結果】APIに送信されるメッセージに件数情報が含まれること
+     */
+    it('should truncate rows to 50 and include note in prompt', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key-sk-xxxx'
+
+      const service = new LlmService()
+      const streamSpy = vi.spyOn(service['client'].messages, 'stream').mockReturnValue(
+        createMockStream(['分析結果']) as ReturnType<typeof service['client']['messages']['stream']>
+      )
+
+      const rows = Array.from({ length: 60 }, (_, i) => ({ id: i }))
+
+      for await (const _chunk of service.analyzeResults({
+        question: 'テスト',
+        sql: 'SELECT id FROM data',
+        columns: ['id'],
+        rows,
+      })) {
+        // consume
+      }
+
+      const callArgs = streamSpy.mock.calls[0][0] as { messages: Array<{ content: string }> }
+      const userMessage = callArgs.messages[0].content
+      expect(userMessage).toContain('60件')
+      expect(userMessage).toContain('先頭50件を表示')
+    })
+
+    /**
+     * 【テスト対象】LlmService.analyzeResults()
+     * 【テスト内容】APIエラー時にLlmApiErrorがスローされること
+     * 【期待結果】LlmApiError がスローされること
+     */
+    it('should throw LlmApiError when stream throws API error', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key-sk-xxxx'
+
+      const service = new LlmService()
+
+      // stream() 自体は成功するが、async iteratorがエラーを投げる
+      const { APIError } = await import('@anthropic-ai/sdk')
+      const apiError = new APIError(500, undefined, 'Internal server error', new Headers())
+
+      vi.spyOn(service['client'].messages, 'stream').mockReturnValue(
+        createErrorStream(apiError) as ReturnType<typeof service['client']['messages']['stream']>
+      )
+
+      const chunks: string[] = []
+      await expect(async () => {
+        for await (const chunk of service.analyzeResults({
+          question: 'test',
+          sql: 'SELECT 1',
+          columns: ['id'],
+          rows: [{ id: 1 }],
+        })) {
+          chunks.push(chunk)
+        }
+      }).rejects.toThrow(LlmApiError)
+    })
+
+    /**
+     * 【テスト対象】LlmService.analyzeResults()
+     * 【テスト内容】非APIエラー時にもLlmApiErrorがスローされること
+     * 【期待結果】汎用エラーが LlmApiError にラップされること
+     */
+    it('should throw LlmApiError for non-API stream errors', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key-sk-xxxx'
+
+      const service = new LlmService()
+
+      vi.spyOn(service['client'].messages, 'stream').mockReturnValue(
+        createErrorStream(new Error('connection reset')) as ReturnType<typeof service['client']['messages']['stream']>
+      )
+
+      await expect(async () => {
+        for await (const _chunk of service.analyzeResults({
+          question: 'test',
+          sql: 'SELECT 1',
+          columns: ['id'],
+          rows: [{ id: 1 }],
+        })) {
+          // consume
+        }
+      }).rejects.toThrow(LlmApiError)
+    })
+
+    /**
+     * 【テスト対象】LlmService.analyzeResults()
+     * 【テスト内容】stream()自体がエラーを投げた場合にLlmApiErrorがスローされること
+     * 【期待結果】LlmApiError がスローされること
+     */
+    it('should throw LlmApiError when stream() call throws', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key-sk-xxxx'
+
+      const service = new LlmService()
+
+      vi.spyOn(service['client'].messages, 'stream').mockImplementation(() => {
+        throw new Error('connection failed')
+      })
+
+      await expect(async () => {
+        for await (const _chunk of service.analyzeResults({
+          question: 'test',
+          sql: 'SELECT 1',
+          columns: ['id'],
+          rows: [{ id: 1 }],
+        })) {
+          // consume
+        }
+      }).rejects.toThrow(LlmApiError)
     })
   })
 })
