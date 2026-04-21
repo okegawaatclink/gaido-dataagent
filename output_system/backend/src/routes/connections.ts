@@ -32,7 +32,7 @@ import {
   ConnectionNotFoundError,
   DbConnectionInput,
 } from '../services/connectionManager'
-import { invalidateSchemaCache } from '../services/schema'
+import { invalidateSchemaCache, refreshSchema } from '../services/schema'
 import { destroyConnection } from '../services/database'
 
 const router = Router()
@@ -168,7 +168,7 @@ router.get('/', (_req: Request, res: Response) => {
  * @returns 400 Bad Request - バリデーションエラー
  * @returns 409 Conflict - 接続名の重複
  */
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   // リクエストボディをバリデーション（パスワード必須）
   const validation = validateConnectionInput(req.body, true)
   if (validation.error) {
@@ -177,6 +177,12 @@ router.post('/', (req: Request, res: Response) => {
 
   try {
     const connection = create(validation.input!)
+
+    // スキーマを非同期で自動取得・永続化（登録直後にキャッシュを温める）
+    refreshSchema(connection.id).catch((err) => {
+      console.warn(`[connections] POST / schema pre-fetch failed for ${connection.id}:`, err)
+    })
+
     return res.status(201).json(connection)
   } catch (err) {
     if (err instanceof DuplicateConnectionNameError) {
@@ -223,6 +229,38 @@ router.post('/test', async (req: Request, res: Response) => {
 })
 
 /**
+ * POST /api/connections/:id/refresh-schema
+ * 指定DB接続先のスキーマ情報をDBから再取得し永続化する
+ *
+ * テーブル定義が変更された場合にユーザーが手動で呼び出す。
+ *
+ * @param id - 対象の接続先UUID
+ * @returns 200 OK - 再取得したスキーマ情報
+ * @returns 404 Not Found - 指定IDが存在しない
+ * @returns 500 Internal Server Error - DB接続エラー
+ */
+router.post('/:id/refresh-schema', async (req: Request<{ id: string }>, res: Response) => {
+  const { id } = req.params
+
+  try {
+    const schema = await refreshSchema(id)
+    return res.status(200).json({
+      message: `スキーマを再取得しました（${schema.tables.length}テーブル）`,
+      tables: schema.tables.length,
+      cachedAt: new Date().toISOString(),
+    })
+  } catch (err) {
+    if (err instanceof ConnectionNotFoundError) {
+      return res.status(404).json({ error: err.message })
+    }
+    console.error(`[connections] POST /${id}/refresh-schema error:`, err)
+    return res.status(500).json({
+      error: 'スキーマの再取得に失敗しました。接続先の設定を確認してください。',
+    })
+  }
+})
+
+/**
  * PUT /api/connections/:id
  * DB接続先を更新する
  *
@@ -248,10 +286,14 @@ router.put('/:id', async (req: Request<{ id: string }>, res: Response) => {
   try {
     const updated = update(id, validation.input!)
 
-    // PBI #149: 接続先更新時にスキーマキャッシュと接続プールを無効化する
-    // 接続先情報が変わった場合、古いキャッシュを使い続けないよう即座に無効化する
+    // 接続先更新時にスキーマキャッシュと接続プールを無効化する
     invalidateSchemaCache(id)
     await destroyConnection(id)
+
+    // スキーマを非同期で再取得・永続化
+    refreshSchema(id).catch((err) => {
+      console.warn(`[connections] PUT /:id schema re-fetch failed for ${id}:`, err)
+    })
 
     return res.status(200).json(updated)
   } catch (err) {

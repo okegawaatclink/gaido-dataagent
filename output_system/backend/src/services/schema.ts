@@ -31,6 +31,7 @@
 
 import Knex, { Knex as KnexType } from 'knex'
 import { getById, ConnectionNotFoundError } from './connectionManager'
+import { getHistoryDb, getDbConnectionById, updateDbConnectionSchemaCache } from './historyDb'
 
 /** カラム情報 */
 export interface ColumnInfo {
@@ -308,16 +309,46 @@ export function buildSchemaInfo(
  * ```
  */
 export async function fetchSchema(dbConnectionId: string): Promise<SchemaInfo> {
-  // キャッシュから返せる場合は即返却（DB接続コストを削減）
-  const cached = schemaCache.get(dbConnectionId)
-  if (cached) {
-    console.info(`[schema] Cache hit for dbConnectionId: ${dbConnectionId}`)
-    return cached
+  // 1. メモリキャッシュから返せる場合は即返却
+  const memoryCached = schemaCache.get(dbConnectionId)
+  if (memoryCached) {
+    console.info(`[schema] Memory cache hit for dbConnectionId: ${dbConnectionId}`)
+    return memoryCached
   }
 
-  console.info(`[schema] Cache miss, fetching from DB for dbConnectionId: ${dbConnectionId}`)
+  // 2. SQLite 永続キャッシュから返せる場合はメモリキャッシュに載せて返却
+  try {
+    const db = getHistoryDb()
+    const row = getDbConnectionById(db, dbConnectionId)
+    if (row?.schema_cache) {
+      const persisted = JSON.parse(row.schema_cache) as SchemaInfo
+      schemaCache.set(dbConnectionId, persisted)
+      console.info(
+        `[schema] Persistent cache hit for dbConnectionId: ${dbConnectionId} (cached at: ${row.schema_cached_at})`
+      )
+      return persisted
+    }
+  } catch (err) {
+    console.warn('[schema] Failed to read persistent cache, falling back to DB query:', err)
+  }
 
-  // 動的knexインスタンスを生成
+  // 3. キャッシュなし → DBに問い合わせてスキーマを取得し、永続化する
+  return refreshSchema(dbConnectionId)
+}
+
+/**
+ * 指定DB接続先のスキーマをDBから再取得し、永続キャッシュとメモリキャッシュの両方を更新する
+ *
+ * 接続登録時やユーザーの手動リフレッシュ時に呼び出す。
+ *
+ * @param dbConnectionId - DB接続先ID（UUID）
+ * @returns 再取得したスキーマ情報
+ * @throws ConnectionNotFoundError 接続先が見つからない場合
+ * @throws Error DB接続失敗またはクエリエラー
+ */
+export async function refreshSchema(dbConnectionId: string): Promise<SchemaInfo> {
+  console.info(`[schema] Fetching schema from DB for dbConnectionId: ${dbConnectionId}`)
+
   let knexInstance: KnexType | null = null
   try {
     const { knex, databaseName, dbType } = buildDynamicKnex(dbConnectionId)
@@ -338,15 +369,22 @@ export async function fetchSchema(dbConnectionId: string): Promise<SchemaInfo> {
         )
     }
 
-    // キャッシュに保存（以降のリクエストはキャッシュから返す）
+    // メモリキャッシュに保存
     schemaCache.set(dbConnectionId, schemaInfo)
-    console.info(
-      `[schema] Schema cached for dbConnectionId: ${dbConnectionId} (${schemaInfo.tables.length} tables)`
-    )
+
+    // SQLite 永続キャッシュに保存
+    try {
+      const db = getHistoryDb()
+      updateDbConnectionSchemaCache(db, dbConnectionId, JSON.stringify(schemaInfo))
+      console.info(
+        `[schema] Schema persisted for dbConnectionId: ${dbConnectionId} (${schemaInfo.tables.length} tables)`
+      )
+    } catch (err) {
+      console.warn('[schema] Failed to persist schema cache (non-fatal):', err)
+    }
 
     return schemaInfo
   } finally {
-    // スキーマ取得後は動的knexインスタンスを破棄してリソースをリリース
     if (knexInstance) {
       await knexInstance.destroy()
     }

@@ -55,6 +55,8 @@ export interface DbConnectionRow {
   password_encrypted: string
   database_name: string
   is_last_used: number  // SQLite では BOOLEAN は INTEGER（0/1）として保存
+  schema_cache: string | null  // SchemaInfo の JSON 文字列（キャッシュ済みスキーマ）
+  schema_cached_at: string | null  // スキーマキャッシュの取得日時（ISO 8601）
   created_at: string
   updated_at: string
 }
@@ -253,6 +255,16 @@ function runMigrations(db: Database.Database): void {
       updated_at         DATETIME NOT NULL
     )
   `)
+
+  // schema_cache カラムの追加（既存DB互換: カラムが未存在の場合のみ追加）
+  const columns = db.pragma('table_info(db_connections)') as Array<{ name: string }>
+  const columnNames = columns.map((c) => c.name)
+  if (!columnNames.includes('schema_cache')) {
+    db.exec(`ALTER TABLE db_connections ADD COLUMN schema_cache TEXT DEFAULT NULL`)
+  }
+  if (!columnNames.includes('schema_cached_at')) {
+    db.exec(`ALTER TABLE db_connections ADD COLUMN schema_cached_at DATETIME DEFAULT NULL`)
+  }
 
   // ===========================================================================
   // conversations テーブル（会話セッション）[db_connection_id を追加]
@@ -678,7 +690,7 @@ export function getDbConnectionById(
 ): DbConnectionRow | undefined {
   const stmt = db.prepare(`
     SELECT id, name, db_type, host, port, username, password_encrypted,
-           database_name, is_last_used, created_at, updated_at
+           database_name, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
     FROM db_connections
     WHERE id = ?
   `)
@@ -694,7 +706,7 @@ export function getDbConnectionById(
 export function listDbConnections(db: Database.Database): DbConnectionRow[] {
   const stmt = db.prepare(`
     SELECT id, name, db_type, host, port, username, password_encrypted,
-           database_name, is_last_used, created_at, updated_at
+           database_name, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
     FROM db_connections
     ORDER BY name ASC
   `)
@@ -718,6 +730,34 @@ export function deleteDbConnection(db: Database.Database, id: string): number {
 }
 
 /**
+ * DB接続先のスキーマキャッシュを更新する
+ *
+ * @param db - Database インスタンス
+ * @param id - 対象のDB接続先ID
+ * @param schemaJson - SchemaInfo の JSON 文字列
+ */
+export function updateDbConnectionSchemaCache(
+  db: Database.Database,
+  id: string,
+  schemaJson: string
+): void {
+  const now = new Date().toISOString()
+  const stmt = db.prepare(`
+    UPDATE db_connections
+    SET schema_cache = @schema_cache,
+        schema_cached_at = @schema_cached_at,
+        updated_at = @updated_at
+    WHERE id = @id
+  `)
+  stmt.run({
+    id,
+    schema_cache: schemaJson,
+    schema_cached_at: now,
+    updated_at: now,
+  })
+}
+
+/**
  * 最後に使用したDB接続先を取得する
  *
  * is_last_used = 1 のレコードを取得する。
@@ -731,7 +771,7 @@ export function getLastUsedDbConnection(
 ): DbConnectionRow | undefined {
   const stmt = db.prepare(`
     SELECT id, name, db_type, host, port, username, password_encrypted,
-           database_name, is_last_used, created_at, updated_at
+           database_name, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
     FROM db_connections
     WHERE is_last_used = 1
     ORDER BY updated_at DESC
