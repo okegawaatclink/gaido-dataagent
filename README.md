@@ -1,21 +1,40 @@
-# DataAgent
+# DataAgent - 自然言語データ分析システム
 
 ## 概要
 
-DataAgentは、自然言語でデータベースに問い合わせ、SQLを自動生成してグラフやテーブルで可視化するシステムです。Databricks Genieのような使いやすいデータ分析インターフェースを提供し、ITリテラシーの高低に関わらず誰でも簡単にデータ分析が可能です。
+DataAgentは、Databricks Genieのような自然言語データ分析システムです。チャット形式で自然言語の質問を入力すると、Claude APIを使用してSQLを自動生成・実行し、結果をグラフやテーブルで可視化します。
+
+今回の改修では、固定されたDB接続先から複数DB接続先を動的に管理できる機能を追加しました。ユーザーは画面からDB接続先（MySQL/PostgreSQL）を登録・編集・削除でき、ヘッダーのドロップダウンから簡単に切り替えられます。
 
 ## 達成目標
 
-- 自然言語でのチャット形式のデータベース問い合わせ
-- Claude APIによるSQL自動生成
-- SQLの透明性確保（生成されたSQLを表示）
-- SELECTクエリのみの読み取り専用実行
-- クエリ結果の自動可視化（棒グラフ、折れ線グラフ、円グラフ、テーブル）
-- LLMによるグラフ種類の自動判定
-- クエリ履歴の保存・再利用
-- ストリーミング応答による快適なUI体験
-- 会話コンテキスト維持による複雑なクエリへの対応
-- AI分析コメント（データの傾向・特徴の自動分析）
+### 既存機能（改修前から実装済み）
+
+1. **自然言語チャット入力**: チャット形式のUIで自然言語の質問を入力
+2. **SQL自動生成**: Claude API（Anthropic）を使用して自然言語からSQLを自動生成
+3. **SQL表示**: 生成されたSQLをユーザーに表示（透明性確保）
+4. **SQL実行**: SELECTクエリのみ実行可能（読み取り専用）
+5. **結果可視化**: クエリ結果を棒グラフ、折れ線グラフ、円グラフ、テーブルで表示
+6. **グラフ種類自動判定**: LLMがデータ特性から最適なグラフ種類を自動提案
+7. **クエリ履歴**: 過去の質問と結果を保存・再利用可能
+8. **ストリーミング応答**: ChatGPTのように応答が逐次表示される
+9. **スキーマ自動取得**: DB接続時にINFORMATION_SCHEMAからテーブル・カラム情報を自動取得
+10. **エラーハンドリング**: 不正SQL生成時はエラー表示+再試行ガイドを提示
+11. **AI分析コメント**: クエリ結果に対してLLMがデータの傾向・特徴・注目ポイントを自動分析
+12. **会話コンテキスト維持**: 同一会話内の過去やり取りをLLMに渡し、修正依頼に対応
+
+### 改修で追加した新機能
+
+13. **複数DB接続先管理**: 画面からDB接続先（接続名、ホスト、ポート、ユーザー名、パスワード、DB名、DB種別）を登録・編集・削除可能
+14. **DB接続先選択**: ヘッダーのドロップダウンからDB接続先を切り替え可能
+15. **DB切替による会話分離**: DB接続先ごとに会話履歴が分離される
+16. **接続中DB表示**: ヘッダーのDB選択ドロップダウンに現在接続中のDB名を常時表示
+17. **DB接続テスト**: DB接続先登録・編集時に接続可否を確認可能
+18. **DB管理モーダル**: DB選択ドロップダウンの「管理」ボタンからCRUD操作可能
+19. **初回起動ガイド**: DB接続先が未登録の場合、ウェルカム画面を表示
+20. **デフォルトDB選択**: アプリ起動時、最後に使用したDB接続先を自動選択
+21. **パスワード暗号化**: DB接続先のパスワードはAES-256-GCMで暗号化してSQLiteに保存
+22. **スキーマキャッシュ**: DB選択時にスキーマ情報を取得しキャッシュ
 
 ## システム構成
 
@@ -29,20 +48,27 @@ flowchart TB
         subgraph "Web Container"
             React["React + TypeScript<br>Recharts<br>Vite"]
             Express["Node.js + Express<br>TypeScript"]
+            ConnectionManager["Connection Manager<br>DB接続先CRUD<br>パスワード暗号化"]
             SchemaLoader["Schema Loader<br>INFORMATION_SCHEMA<br>テーブル/カラムコメント取得"]
             SQLValidator["SQL Validator<br>SELECT のみ許可"]
             QueryHistory["Query History<br>SQLite 履歴管理"]
             ContextManager["Context Manager<br>会話履歴をLLMに渡す"]
             AnalysisEngine["Analysis Engine<br>クエリ結果のAI分析"]
+            Encryption["Encryption<br>AES-256-GCM<br>パスワード暗号化/復号"]
         end
 
         subgraph "MySQL Container"
-            MySQL["MySQL 8.0<br>ユーザーデータ"]
+            MySQL["MySQL 8.0<br>サンプルデータ"]
         end
 
         subgraph "phpMyAdmin Container"
             PMA["phpMyAdmin 5<br>DB管理UI"]
         end
+    end
+
+    subgraph "External User DBs"
+        UserMySQL["MySQL<br>ユーザーDB"]
+        UserPostgreSQL["PostgreSQL<br>ユーザーDB"]
     end
 
     subgraph "External Services"
@@ -53,13 +79,19 @@ flowchart TB
     React -->|"REST API + SSE"| Express
     Express -->|"SQL生成 Streaming"| Claude
     Express -->|"分析コメント Streaming"| Claude
+    Express --> ConnectionManager
     Express --> SchemaLoader
     Express --> SQLValidator
     Express --> QueryHistory
     Express --> ContextManager
     Express --> AnalysisEngine
-    SchemaLoader -->|"INFORMATION_SCHEMA<br>+ コメント情報"| MySQL
-    SQLValidator -->|"SELECT only"| MySQL
+    ConnectionManager --> Encryption
+    ConnectionManager -->|"接続テスト"| UserMySQL
+    ConnectionManager -->|"接続テスト"| UserPostgreSQL
+    SchemaLoader -->|"INFORMATION_SCHEMA<br>+ コメント情報"| UserMySQL
+    SchemaLoader -->|"INFORMATION_SCHEMA<br>+ コメント情報"| UserPostgreSQL
+    SQLValidator -->|"SELECT only"| UserMySQL
+    SQLValidator -->|"SELECT only"| UserPostgreSQL
     PMA -->|"管理"| MySQL
 ```
 
@@ -67,65 +99,122 @@ flowchart TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Dashboard
-    Dashboard --> ChatScreen
-    ChatScreen --> ChatScreen: メッセージ送信<br>SQL実行
-    ChatScreen --> HistoryDetail: 履歴をクリック
-    HistoryDetail --> ChatScreen: 会話を選択
-    ChatScreen --> Dashboard: 新規会話
+    [*] --> 初回起動判定
+    state 初回起動判定 <<choice>>
+    初回起動判定 --> 初回起動ガイド: "DB接続先が0件"
+    初回起動判定 --> チャット画面: "DB接続先が1件以上"
+    初回起動ガイド --> DB管理モーダル: "DB接続先を登録"
+    DB管理モーダル --> チャット画面: "登録完了・モーダル閉じる"
+    チャット画面 --> チャット画面: "新しい会話を作成"
+    チャット画面 --> チャット画面: "履歴から会話を選択"
+    チャット画面 --> チャット画面: "DB接続先を切り替え"
+    チャット画面 --> DB管理モーダル: "管理ボタンクリック"
 ```
 
 ## 画面詳細
 
-### ダッシュボード
+### チャット画面（/）
 
-- **URL**: `/`
-
-![ダッシュボード](ai_generated/readme_screenshots/dashboard.png)
+**メイン画面。ユーザーがDB接続先を選択し、自然言語で質問を入力して、AI生成SQLの結果をグラフ/テーブルで確認する画面。**
 
 #### UI要素
 
 | 要素 | 挙動 | 説明 |
 |------|------|------|
-| 新しい会話ボタン | クリックで新規チャット開始 | チャット画面へ遷移 |
-| 過去の会話リスト | クリックで会話詳細表示 | 左サイドバーに過去の質問・結果を一覧表示 |
-| 履歴検索バー | テキスト入力 | キーワードで過去の会話を検索 |
-| チャット入力エリア | テキスト入力 | 自然言語で質問を入力 |
-| メッセージ送信ボタン | クリックで送信 | Enterキーまたはボタンで送信 |
+| DataAgent ロゴ | クリック | トップページへ遷移（同じページ） |
+| DB選択ドロップダウン | 選択変更 | 接続先を切り替え、サイドバーの履歴を更新 |
+| 管理ボタン | クリック | DB管理モーダルを開く |
+| 新しい会話ボタン | クリック | 新規会話を開始（現在の会話は履歴に保存） |
+| サイドバー「検索ボックス」 | テキスト入力 | 現在のDB接続先の会話履歴を絞り込み検索 |
+| サイドバー「履歴リスト」 | クリック | 過去の会話を切り替え、チャットエリアにメッセージを再表示 |
+| チャットエリア「ユーザーメッセージ」 | テキスト表示 | 自然言語で入力した質問 |
+| チャットエリア「アシスタントメッセージ」 | テキスト表示 | Claude が生成した説明 |
+| SQL表示ブロック | テキスト表示 | 生成されたSELECT文。シンタックスハイライト付き |
+| グラフ表示エリア | グラフ表示 | 棒グラフ、折れ線グラフ、円グラフ、またはテーブル |
+| AI分析コメント | テキスト表示 | クエリ結果の傾向・特徴・注目ポイントを分析したコメント |
+| 入力フィールド | テキスト入力 | 自然言語の質問を入力。Enter で送信 |
+| 送信ボタン | クリック | メッセージを送信 |
+| ローディング表示 | 回転アニメーション | LLM API待機中 |
 
 #### 画面遷移条件
 
-- 「新しい会話」ボタンをクリック → 新規チャット開始
-- 左サイドバーの過去の会話をクリック → その会話の詳細を表示
-- チャット入力して送信 → SQLが生成・実行され、結果がグラフ/テーブルで表示
+- **DB接続先を切り替え**: ドロップダウンで別の接続先を選択すると、サイドバーの履歴が選択中DBの会話のみに更新される。現在のチャットエリアはクリアされる
+- **新しい会話を開始**: 「新しい会話」ボタンクリックで、チャットエリアがクリアされて新規会話が開始される。前の会話は履歴に保存される
+- **過去の会話を復元**: サイドバーの履歴をクリックすると、その会話の全メッセージがチャットエリアに表示される
+- **DB管理モーダル**: 「管理」ボタンクリックでモーダルダイアログが表示される
 
-### チャット画面
+### DB管理モーダル（モーダルダイアログ）
+
+**DB接続先のCRUD操作を行うモーダル。接続情報の入力・検証・テストが可能。**
 
 #### UI要素
 
 | 要素 | 挙動 | 説明 |
 |------|------|------|
-| ユーザーメッセージ | 表示のみ | 自然言語の入力が表示 |
-| AI応答テキスト | ストリーミング表示 | LLMの応答が逐次表示される |
-| 生成SQL | 表示のみ | SELECT文として SQL Validator でチェック済み |
-| グラフ/テーブル | インタラクティブ | Rechartsによる動的グラフ描画 |
-| AI分析コメント | ストリーミング表示 | クエリ結果の傾向・特徴を自動分析 |
+| モーダルタイトル | テキスト表示 | 「DB接続先管理」 |
+| 閉じるボタン | クリック | モーダルを閉じる |
+| 接続先一覧 | テーブル表示 | 登録済みの全接続先を表示。編集・削除ボタン付き |
+| 接続名 | テキスト入力 | 表示用の接続名（例: 本番DB、検証DB） |
+| DB種別 | ドロップダウン | MySQLまたはPostgreSQL を選択 |
+| ホスト名 | テキスト入力 | DBサーバーのホスト名またはIP |
+| ポート番号 | 数値入力 | ポート番号（MySQL デフォルト: 3306、PostgreSQL デフォルト: 5432） |
+| ユーザー名 | テキスト入力 | DB接続ユーザー名 |
+| パスワード | パスワード入力 | DB接続パスワード（暗号化して保存） |
+| データベース名 | テキスト入力 | DB名 |
+| 接続テストボタン | クリック | 入力した接続情報でテスト接続。成功/失敗をトースト通知で表示 |
+| 保存ボタン | クリック | 接続情報を登録または更新 |
+| 編集ボタン | クリック | 接続先の情報をフォームに読み込んで編集可能にする |
+| 削除ボタン | クリック | 接続先と関連する全会話・メッセージを削除 |
 
-#### データベース連携
+#### 画面遷移条件
 
-| 要素 | DB対応（テーブル.カラム） |
-|------|--------------------------|
-| ユーザーデータ | 接続先DBのテーブル（外部） |
-| クエリ履歴 | messages.sql（SQLite） |
-| クエリ結果 | messages.query_result（SQLite） |
-| 分析コメント | messages.analysis（SQLite） |
+- **保存成功**: トースト通知「接続先を保存しました」を表示後、自動的にモーダルは開いたまま。接続先一覧が更新される
+- **テスト成功**: トースト通知「接続テストに成功しました」
+- **テスト失敗**: トースト通知「接続テストに失敗しました: [エラーメッセージ]」
+- **モーダルを閉じる**: 変更はSQLiteに保存済みのため、再度モーダルを開いても同じ状態
+- **チャット画面に戻る**: モーダルを閉じるとチャット画面に戻る
+
+### 初回起動ガイド（/）
+
+**DB接続先が未登録の場合に表示。ウェルカム画面でDB登録を促す。**
+
+#### UI要素
+
+| 要素 | 挙動 | 説明 |
+|------|------|------|
+| DataAgent アイコン | 表示 | アプリケーションロゴ |
+| ウェルカムタイトル | テキスト表示 | 「DataAgent へようこそ」 |
+| ガイドメッセージ | テキスト表示 | 「まずDB接続先を登録してください」 |
+| DB接続先を登録するボタン | クリック | DB管理モーダルを開く |
+
+#### 画面遷移条件
+
+- **DB接続先を登録**: ボタンクリックでDB管理モーダルが表示される
+- **登録完了**: 最初のDB接続先が登録されると、自動的に初回起動ガイドから チャット画面に切り替わる
 
 ## ER図
 
+DataAgent 内部DB（SQLite）のテーブル構成：
+
 ```mermaid
 erDiagram
+    db_connections {
+        string id PK "UUID"
+        string name "接続名（表示用）"
+        string db_type "mysql / postgresql"
+        string host "ホスト名"
+        integer port "ポート番号"
+        string username "ユーザー名"
+        string password_encrypted "暗号化済みパスワード（AES-256-GCM）"
+        string database_name "データベース名"
+        integer is_last_used "最後に使用したDB（0/1）"
+        datetime created_at "作成日時"
+        datetime updated_at "更新日時"
+    }
+
     conversations {
         string id PK "UUID"
+        string db_connection_id FK "DB接続先ID"
         string title "会話タイトル（最初の質問から自動生成）"
         datetime created_at "作成日時"
         datetime updated_at "更新日時"
@@ -144,6 +233,7 @@ erDiagram
         datetime created_at "作成日時"
     }
 
+    db_connections ||--o{ conversations : "has"
     conversations ||--o{ messages : "has"
 ```
 
@@ -151,67 +241,84 @@ erDiagram
 
 ```
 output_system/
-├── frontend/                 # React フロントエンド
+├── frontend/                      # React フロントエンド
 │   ├── src/
-│   │   ├── components/       # UI コンポーネント
-│   │   │   ├── Chat/         # チャット関連
-│   │   │   ├── Chart/        # グラフ描画
-│   │   │   ├── History/      # 履歴表示
-│   │   │   └── Layout/       # レイアウト
-│   │   ├── pages/            # ページコンポーネント
-│   │   ├── services/         # APIクライアント
-│   │   ├── hooks/            # カスタムフック
-│   │   ├── styles/           # グローバルCSS
-│   │   ├── types/            # TypeScript型定義
-│   │   ├── App.tsx           # アプリケーションルート
-│   │   └── main.tsx          # エントリーポイント
+│   │   ├── App.tsx               # メインコンポーネント
+│   │   ├── components/           # React コンポーネント
+│   │   │   ├── ChatInterface.tsx # チャット画面メインコンポーネント
+│   │   │   ├── ChatArea.tsx      # メッセージ表示エリア
+│   │   │   ├── InputArea.tsx     # 入力フィールド
+│   │   │   ├── Sidebar.tsx       # 左サイドバー（会話履歴）
+│   │   │   ├── Header.tsx        # ヘッダー（DB選択ドロップダウン）
+│   │   │   ├── DBManagementModal.tsx  # DB管理モーダル
+│   │   │   ├── WelcomeScreen.tsx      # 初回起動ガイド
+│   │   │   ├── Graph.tsx         # グラフ表示（Recharts）
+│   │   │   └── ...
+│   │   ├── services/             # API通信
+│   │   │   └── api.ts
+│   │   ├── styles/               # CSS
+│   │   │   └── ...
+│   │   └── main.tsx
+│   ├── index.html
 │   ├── package.json
-│   ├── vite.config.ts        # Vite設定
-│   └── vitest.config.ts      # テスト設定
+│   └── vite.config.ts
 │
-├── backend/                  # Node.js/Express バックエンド
+├── backend/                       # Node.js/Express バックエンド
 │   ├── src/
-│   │   ├── routes/           # APIエンドポイント
-│   │   │   ├── chat.ts       # チャットエンドポイント
-│   │   │   ├── history.ts    # 履歴取得エンドポイント
-│   │   │   └── schema.ts     # スキーマ取得エンドポイント
-│   │   ├── services/         # ビジネスロジック
-│   │   │   ├── llm.ts        # Claude API連携
-│   │   │   ├── database.ts   # データベース操作
-│   │   │   ├── schema.ts     # スキーマ取得
-│   │   │   ├── sqlValidator.ts  # SQL検証
-│   │   │   └── historyDb.ts  # SQLite操作
-│   │   ├── utils/            # ユーティリティ
-│   │   └── index.ts          # サーバーエントリーポイント
+│   │   ├── index.ts              # メインサーバー
+│   │   ├── routes/               # APIルート
+│   │   │   ├── chat.ts           # POST /api/chat (SSE)
+│   │   │   ├── history.ts        # GET/DELETE /api/history
+│   │   │   ├── schema.ts         # GET /api/schema
+│   │   │   └── connections.ts    # GET/POST/PUT/DELETE /api/connections
+│   │   ├── services/             # ビジネスロジック
+│   │   │   ├── chatService.ts
+│   │   │   ├── dbConnectionService.ts
+│   │   │   ├── schemaLoader.ts
+│   │   │   ├── encryption.ts
+│   │   │   ├── sqlValidator.ts
+│   │   │   └── ...
+│   │   ├── db/                   # データベース
+│   │   │   └── sqlite.ts         # SQLite 初期化・マイグレーション
+│   │   └── types/                # TypeScript型定義
+│   │       └── ...
 │   ├── package.json
-│   ├── tsconfig.json
-│   └── vitest.config.ts      # テスト設定
+│   └── tsconfig.json
 │
-├── mysql-init/               # MySQL初期化スクリプト
-│   └── init.sql              # テーブル定義・サンプルデータ
+├── test/                          # テスト
+│   ├── unit/
+│   │   ├── frontend/
+│   │   │   └── *.test.tsx
+│   │   └── backend/
+│   │       └── *.test.ts
+│   └── e2e/
+│       └── *.spec.ts (Playwright)
 │
-├── test/                     # Playwright E2Eテスト
-│   ├── e2e/
-│   │   ├── chat.spec.ts      # チャット機能テスト
-│   │   ├── history.spec.ts   # 履歴機能テスト
-│   │   └── visualization.spec.ts  # グラフ表示テスト
-│   └── playwright.config.ts   # Playwright設定
+├── mysql-init/                    # MySQL初期化スクリプト
+│   └── init.sql                  # サンプルデータ
 │
-├── docker-compose.yml        # Docker Compose設定
-├── Dockerfile                # コンテナビルド定義
-├── package.json              # ワークスペースパッケージ定義
-└── .env                      # 環境変数（ローカル開発用）
+├── docker-compose.yml             # Docker Compose 定義
+├── Dockerfile                     # イメージビルド定義
+├── package.json                   # 統合パッケージ設定
+├── playwright.config.ts           # Playwright E2Eテスト設定
+├── openapi.yaml                   # OpenAPI仕様書
+└── .env                          # 環境変数（.gitignoreで管理）
 ```
 
-## WebAPIエンドポイント一覧
+## WebAPI エンドポイント一覧
 
 | メソッド | パス | 説明 |
 |---------|------|------|
-| POST | /api/chat | 自然言語でクエリを送信し、SQL生成・実行・結果を取得（SSE） |
-| GET | /api/history | 会話履歴一覧を取得 |
-| GET | /api/history/:id | 特定の会話の詳細を取得 |
-| DELETE | /api/history/:id | 特定の会話を削除 |
-| GET | /api/schema | 接続先DBのスキーマ情報を取得 |
+| POST | `/api/chat` | 自然言語でクエリを送信し、SQL生成・実行・結果を取得（SSE） |
+| GET | `/api/history` | 会話履歴一覧を取得（db_connection_idフィルター） |
+| GET | `/api/history/:id` | 特定の会話の詳細を取得 |
+| DELETE | `/api/history/:id` | 特定の会話を削除 |
+| GET | `/api/schema` | 接続先DBのスキーマ情報を取得 |
+| GET | `/api/connections` | DB接続先一覧を取得 |
+| POST | `/api/connections` | DB接続先を登録 |
+| PUT | `/api/connections/:id` | DB接続先を更新 |
+| DELETE | `/api/connections/:id` | DB接続先を削除（関連会話も削除） |
+| POST | `/api/connections/test` | DB接続テスト |
 
 詳細は [openapi.yaml](./output_system/openapi.yaml) を参照。
 
@@ -219,142 +326,45 @@ output_system/
 
 ### 前提条件
 
-- Docker & Docker Compose がインストール済み
-- Claude API キーを取得済み（Anthropic コンソール）
-- MySQL接続可能なデータベースを準備
+- Docker と Docker Compose がインストール済み
+- Node.js 20+ がインストール済み
+- `ANTHROPIC_API_KEY` 環境変数を設定（Claude API利用時）
 
-### セットアップ手順
+### 起動コマンド
 
-1. **リポジトリをクローン**
-   ```bash
-   git clone <repository-url>
-   cd <repository-name>/output_system
-   ```
-
-2. **環境変数を設定**
-   ```bash
-   cp .env.example .env
-   # .env を編集し、以下の値を設定:
-   # - CLAUDE_API_KEY: Claude API キー
-   # - DB_HOST: MySQL ホスト名
-   # - DB_PORT: MySQL ポート（デフォルト: 3306）
-   # - DB_USER: MySQL ユーザー名
-   # - DB_PASSWORD: MySQL パスワード
-   # - DB_NAME: データベース名
-   ```
-
-3. **コンテナを起動**
-   ```bash
-   docker compose up -d
-   ```
-
-4. **コンテナが起動したことを確認**
-   ```bash
-   docker compose ps
-   ```
+```bash
+cd output_system
+docker compose up -d
+```
 
 ### アクセスURL
 
-- **フロントエンド（DataAgent）**: http://localhost:3001
-- **バックエンド（API）**: http://localhost:3002
-- **phpMyAdmin（DB管理）**: http://localhost:8080
+以下のURLでアプリケーションにアクセス：
 
-### 停止・削除
+- **フロントエンド**: http://localhost:3001
+- **バックエンド API**: http://localhost:3002
+- **phpMyAdmin** （MySQL管理）: http://localhost:8080
 
-```bash
-# コンテナを停止
-docker compose stop
+### 環境変数
 
-# コンテナを削除
-docker compose down
-
-# ボリュームも削除（データベースがリセットされます）
-docker compose down -v
-```
-
-## 技術スタック
-
-| レイヤー | 技術 | 備考 |
-|---------|------|------|
-| フロントエンド | React 18+, TypeScript, Vite | SPA構成 |
-| UIコンポーネント | Recharts, グローバルCSS | グラフ描画 + テーブル表示 |
-| バックエンド | Node.js 20+, Express, TypeScript | REST API + SSE |
-| DB接続 | knex.js | PostgreSQL/MySQL 抽象化 |
-| LLM連携 | @anthropic-ai/sdk | Claude API公式SDK。SQL生成+分析コメントの2回呼び出し |
-| クエリ履歴 | SQLite (better-sqlite3, WAL mode) | 会話・メッセージの永続化。LLMへの会話コンテキスト提供にも使用 |
-| ユーザーDB | MySQL 8.0 | Docker Compose内で起動。テーブル/カラムコメント対応 |
-| DB管理 | phpMyAdmin 5 | MySQL管理UI。ポート8080 |
-| テスト | Playwright, Vitest | E2Eテスト + ユニットテスト |
-| コンテナ | Docker Compose | web + MySQL + phpMyAdmin の3コンテナ構成 |
-
-## 主な機能
-
-### 1. 自然言語によるデータ分析
-
-チャット形式で自然言語で質問を入力すると、Claude APIが自動的にSQLを生成し、データベースから結果を取得します。
-
-```
-ユーザー: "今月の売上トップ10を教えて"
-↓
-DataAgent: SQLを自動生成 → 実行 → グラフで表示
-```
-
-### 2. SQL の透明性確保
-
-生成されたSQLがユーザーに表示されるため、実際に何が実行されているかが一目瞭然です。不正なクエリがないか確認できます。
-
-### 3. データの自動可視化
-
-クエリ結果に応じて、LLMが最適なグラフ種類（棒グラフ、折れ線グラフ、円グラフ）を自動判定します。複数の値でない場合はテーブル表示します。
-
-### 4. AI 分析コメント
-
-クエリ結果の傾向や特徴を自動分析し、ユーザーに提供します。「今月の売上はxx円で、前月比yy%増加」のような説明が自動生成されます。
-
-### 5. クエリ履歴の保存
-
-過去の質問と結果が自動保存されるため、何度も同じ質問をする必要がありません。左サイドバーから過去の会話を選択すれば、その会話内容がそのまま復元されます。
-
-### 6. 会話コンテキスト維持
-
-同一会話内の過去のやり取り（生成SQL含む）をLLMに渡すため、「直前のクエリをこう修正して」のような相対的な指示に対応できます。
-
-## セキュリティ
-
-- **SQLインジェクション対策**: 生成されたSQLをバリデーション。SELECTクエリのみ許可
-- **読み取り専用**: データベースユーザーに読み取り専用権限を付与
-- **認証なし**: 社内利用のため、ネットワーク隔離で運用
-- **API キーの管理**: Claude APIキーは環境変数で管理
-
-## トラブルシューティング
-
-### コンテナが起動しない場合
+`.env` ファイルに以下を設定：
 
 ```bash
-# ログを確認
-docker compose logs web
-docker compose logs mysql
+# Claude API キー（必須）
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
 
-# 特定のコンテナを再起動
-docker compose restart web
+# DB暗号化キー（AES-256-GCM）
+DB_ENCRYPTION_KEY=your-32-byte-hex-key-here
+
+# バックエンドポート
+BACKEND_PORT=3002
+
+# データベース設定（Docker Compose で自動管理）
+MYSQL_ROOT_PASSWORD=root
+MYSQL_USER=dataagent
+MYSQL_PASSWORD=dataagent
+MYSQL_DATABASE=dataagent
 ```
-
-### データベースに接続できない場合
-
-```bash
-# .env の設定を確認
-# - DB_HOST、DB_PORT、DB_USER、DB_PASSWORD、DB_NAME が正しいか確認
-# - MySQL コンテナが起動しているか確認: docker compose ps
-
-# phpMyAdminで確認
-# http://localhost:8080 で MySQL に接続できるか試す
-```
-
-### SQL実行時にエラーが出る場合
-
-- チャット画面にエラーメッセージが表示されます
-- 「再試行」ボタンをクリックして、別の表現で質問し直すことができます
-- 詳細は生成されたSQLをphpMyAdminで直接実行して確認できます
 
 ## ライセンス
 
