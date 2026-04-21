@@ -442,6 +442,8 @@ Resources:
                 - AlbDns: !GetAtt Alb.DNSName
             - Name: VITE_API_BASE_URL
               Value: ''
+            - Name: __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+              Value: '.amazonaws.com'
           PortMappings:
             - ContainerPort: 3001
             - ContainerPort: 3002
