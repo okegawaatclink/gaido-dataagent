@@ -123,6 +123,103 @@ export interface SseConversationData {
 }
 
 // ---------------------------------------------------------------------------
+// DB接続先関連型（PBI #148 追加）
+// ---------------------------------------------------------------------------
+
+/**
+ * DB種別
+ * バックエンドの DbConnection.dbType に対応する。
+ */
+export type DbType = 'mysql' | 'postgresql'
+
+/**
+ * DB接続先（読み取り用）
+ * GET /api/connections レスポンスの各要素に対応する。
+ * パスワードは返却されない（セキュリティ要件）。
+ *
+ * @property id           - 接続先の一意識別子（UUID）
+ * @property name         - 接続名（例: "本番DB"）
+ * @property dbType       - DB種別（mysql / postgresql）
+ * @property host         - ホスト名またはIPアドレス
+ * @property port         - ポート番号
+ * @property username     - DBユーザー名
+ * @property databaseName - データベース名
+ * @property isLastUsed   - 最後に使用した接続先かどうか
+ * @property createdAt    - 作成日時（ISO 8601文字列）
+ * @property updatedAt    - 更新日時（ISO 8601文字列）
+ */
+export interface DbConnection {
+  id: string
+  name: string
+  dbType: DbType
+  host: string
+  port: number
+  username: string
+  databaseName: string
+  isLastUsed: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * DB接続先入力（作成・更新用）
+ * POST /api/connections / PUT /api/connections/:id のリクエストボディに対応する。
+ * パスワードを含む（登録・更新時のみ送信）。
+ *
+ * @property name         - 接続名
+ * @property dbType       - DB種別（mysql / postgresql）
+ * @property host         - ホスト名またはIPアドレス
+ * @property port         - ポート番号（文字列として入力されることもあるためunion型）
+ * @property username     - DBユーザー名
+ * @property password     - DBパスワード（平文。バックエンドで暗号化して保存）
+ * @property databaseName - データベース名
+ */
+export interface DbConnectionInput {
+  name: string
+  dbType: DbType
+  host: string
+  port: number | string
+  username: string
+  password: string
+  databaseName: string
+}
+
+/**
+ * DB接続テスト結果
+ * POST /api/connections/test のレスポンスボディに対応する。
+ *
+ * @property success - 接続成功かどうか
+ * @property message - 成功/失敗メッセージ
+ */
+export interface DbConnectionTestResult {
+  success: boolean
+  message: string
+}
+
+/**
+ * useDbConnections フックの返り値型
+ *
+ * @property connections      - DB接続先一覧
+ * @property isLoading        - 一覧取得中かどうか
+ * @property error            - エラーメッセージ（null = エラーなし）
+ * @property fetchConnections - 一覧を再取得する関数
+ * @property createConnection - 新規接続先を登録する関数
+ * @property updateConnection - 既存接続先を更新する関数
+ * @property deleteConnection - 接続先を削除する関数
+ * @property testConnection   - 接続テストを実行する関数
+ */
+export interface UseDbConnectionsReturn {
+  connections: DbConnection[]
+  isLoading: boolean
+  error: string | null
+  fetchConnections: () => Promise<void>
+  createConnection: (input: DbConnectionInput) => Promise<DbConnection>
+  updateConnection: (id: string, input: DbConnectionInput) => Promise<DbConnection>
+  deleteConnection: (id: string) => Promise<void>
+  testConnection: (input: DbConnectionInput) => Promise<DbConnectionTestResult>
+}
+
+// ---------------------------------------------------------------------------
 // useChat フックの返り値型
 // ---------------------------------------------------------------------------
 
