@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { execSync } from 'child_process'
 
 /**
  * Vite設定ファイル
@@ -24,7 +25,22 @@ export default defineConfig(({ mode }) => {
     ? env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS.split(',')
     : []
 
+  // ビルド時にgitコミットハッシュを取得してバージョン情報として埋め込む
+  const gitHash = (() => {
+    try {
+      return execSync('git rev-parse --short HEAD').toString().trim()
+    } catch {
+      return 'unknown'
+    }
+  })()
+  const buildDate = new Date().toISOString().slice(0, 10)
+
   return {
+    // ビルド時定数: フロントエンドコードから参照可能
+    define: {
+      __APP_VERSION__: JSON.stringify(`${buildDate} (${gitHash})`),
+    },
+
     plugins: [
       // ReactのFast Refreshと新しいJSX Transformを有効化
       react(),

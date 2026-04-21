@@ -274,6 +274,7 @@ const App: FC = () => {
           <span className="app-header__logo" aria-hidden="true">🤖</span>
           {/* PBI 1.1 受入条件: 「DataAgent」見出しが表示されること */}
           <h1 className="app-header__title">DataAgent</h1>
+          <span className="app-header__version">{__APP_VERSION__}</span>
         </div>
         <div className="app-header__right">
           {/* DB接続先選択ドロップダウン（PBI #149 追加） */}
