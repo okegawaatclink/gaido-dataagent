@@ -1793,6 +1793,60 @@ body {
   text-align: center;
 }
 
+/* =============================================================================
+ * 初回起動ガイド（WelcomeGuide）
+ * PBI #152 追加
+ * DB接続先が0件の場合にチャット画面の代わりに表示されるウェルカム画面
+ * ============================================================================= */
+
+/**
+ * ウェルカムガイド全体のコンテナ
+ * 画面中央にアイコン・タイトル・説明文・ボタンを縦並びで表示する
+ */
+.welcome-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  height: 100%;
+  padding: var(--spacing-xl);
+  text-align: center;
+  gap: var(--spacing-lg);
+}
+
+/** DataAgent アイコン（絵文字） */
+.welcome-guide__icon {
+  font-size: 4rem;
+  line-height: 1;
+}
+
+/** 「DataAgent へようこそ」タイトル */
+.welcome-guide__title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  letter-spacing: -0.025em;
+}
+
+/** 「まずDB接続先を登録してください」説明文 */
+.welcome-guide__message {
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+  max-width: 400px;
+}
+
+/**
+ * 「DB接続先を登録する」ボタン
+ * .btn--primary を継承し、パディングを少し大きめに調整してクリックしやすくする
+ */
+.welcome-guide__register-btn {
+  padding: var(--spacing-md) var(--spacing-xl);
+  font-size: 1rem;
+  margin-top: var(--spacing-sm);
+}
+
 /* ローディングスピナー（DB接続先一覧のローディング表示用） */
 .loading-spinner {
   display: inline-block;
