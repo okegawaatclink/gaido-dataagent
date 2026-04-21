@@ -103,7 +103,7 @@ describe('useHistory', () => {
     )
 
     // Act
-    const { result } = renderHook(() => useHistory())
+    const { result } = renderHook(() => useHistory('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'))
 
     // Assert: マウント直後はローディング中
     expect(result.current.isLoading).toBe(true)
@@ -139,7 +139,7 @@ describe('useHistory', () => {
         }),
       )
 
-    const { result } = renderHook(() => useHistory())
+    const { result } = renderHook(() => useHistory('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'))
 
     // 1回目の fetch 完了を待つ
     await waitFor(() => {
@@ -173,7 +173,7 @@ describe('useHistory', () => {
       }),
     )
 
-    const { result } = renderHook(() => useHistory())
+    const { result } = renderHook(() => useHistory('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'))
 
     // Assert: エラーが設定されること
     await waitFor(() => {
@@ -192,7 +192,7 @@ describe('useHistory', () => {
     // Arrange: ネットワークエラーをシミュレート
     vi.mocked(global.fetch).mockRejectedValueOnce(new Error('Network Error'))
 
-    const { result } = renderHook(() => useHistory())
+    const { result } = renderHook(() => useHistory('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'))
 
     // Assert
     await waitFor(() => {
@@ -228,7 +228,7 @@ describe('useHistory', () => {
         }),
       )
 
-    const { result } = renderHook(() => useHistory())
+    const { result } = renderHook(() => useHistory('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'))
 
     // マウント時の fetch 完了を待つ
     await waitFor(() => {
@@ -287,7 +287,7 @@ describe('useHistory', () => {
         }),
       )
 
-    const { result } = renderHook(() => useHistory())
+    const { result } = renderHook(() => useHistory('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'))
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false)
@@ -346,7 +346,7 @@ describe('useHistory', () => {
         }),
       )
 
-    const { result } = renderHook(() => useHistory())
+    const { result } = renderHook(() => useHistory('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'))
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false)
@@ -363,5 +363,79 @@ describe('useHistory', () => {
     expect(messages[0].result).toBeNull()
     expect(messages[1].result).toBeNull()
     expect(messages[1].error).toBe('SQL実行エラー')
+  })
+
+  // ---------------------------------------------------------------------------
+  // PBI #151 追加テスト: dbConnectionId パラメータ対応
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 【テスト対象】useHistory の dbConnectionId=null 時の動作（PBI #151 追加）
+   * 【テスト内容】dbConnectionId が null の場合は fetch を呼ばず空配列を返す
+   * 【期待結果】
+   *   - conversations が空配列
+   *   - isLoading が false
+   *   - error が null
+   *   - fetch が呼ばれないこと
+   */
+  it('should return empty conversations and not fetch when dbConnectionId is null', async () => {
+    // Act: dbConnectionId なし（null）でフックを使用
+    const { result } = renderHook(() => useHistory(null))
+
+    // fetchが呼ばれないこと（DBが未選択の状態）
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false)
+    })
+    expect(result.current.conversations).toHaveLength(0)
+    expect(result.current.error).toBeNull()
+    // fetch が呼ばれていないこと
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  /**
+   * 【テスト対象】useHistory の dbConnectionId 変更時の自動リフレッシュ（PBI #151 追加）
+   * 【テスト内容】dbConnectionId が変わったとき、自動的に GET /api/history が再取得される
+   * 【期待結果】
+   *   - 最初の dbConnectionId で1回 fetch
+   *   - dbConnectionId が変わると再度 fetch が呼ばれる
+   */
+  it('should re-fetch when dbConnectionId changes', async () => {
+    const firstDbId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const secondDbId = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff'
+
+    // 両方のfetchに対してモックを設定
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([mockConversations[0]]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([mockConversations[1]]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+
+    // 最初の dbConnectionId でレンダリング
+    const { result, rerender } = renderHook(
+      ({ dbId }: { dbId: string }) => useHistory(dbId),
+      { initialProps: { dbId: firstDbId } },
+    )
+
+    // 最初の fetch 完了を待つ
+    await waitFor(() => {
+      expect(result.current.conversations).toHaveLength(1)
+    })
+
+    // Act: dbConnectionId を変更
+    rerender({ dbId: secondDbId })
+
+    // Assert: 2回目の fetch 完了後に異なる会話が返ること
+    await waitFor(() => {
+      expect(result.current.conversations[0].id).toBe(mockConversations[1].id)
+    })
+    expect(global.fetch).toHaveBeenCalledTimes(2)
   })
 })

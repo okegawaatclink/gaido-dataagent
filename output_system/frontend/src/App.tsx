@@ -26,6 +26,10 @@
  * - selectedDbConnectionId state で選択中のDB接続先IDを管理
  * - send() に dbConnectionId を渡すよう ChatContainer の onSend を更新
  * - 接続先が未選択の場合はチャット入力を無効化
+ *
+ * PBI #151 更新（DB別会話履歴管理）:
+ * - useHistory に selectedDbConnectionId を渡してDB別フィルタリングを有効化
+ * - DB切替時に useHistory の dbConnectionId が変わり自動で履歴がリフレッシュされる
  */
 
 import { useState, useCallback, useEffect, useRef, type FC } from 'react'
@@ -54,15 +58,6 @@ const App: FC = () => {
     restoreConversation,
   } = useChat()
 
-  // 会話履歴（一覧取得・リフレッシュ）
-  const {
-    conversations,
-    isLoading: historyLoading,
-    error: historyError,
-    refreshHistory,
-    loadConversation,
-  } = useHistory()
-
   // DB接続先一覧（PBI #149 追加: 選択中DB接続先の管理）
   const { connections, fetchConnections } = useDbConnections()
 
@@ -74,8 +69,21 @@ const App: FC = () => {
    *
    * チャット送信時にバックエンドへ渡し、スキーマ取得・クエリ実行先を指定する。
    * null = 未選択（チャット入力が無効）
+   *
+   * PBI #151: useHistory に渡すことでDB別の会話履歴フィルタリングにも使用する
    */
   const [selectedDbConnectionId, setSelectedDbConnectionId] = useState<string | null>(null)
+
+  // 会話履歴（一覧取得・リフレッシュ）
+  // PBI #151: selectedDbConnectionId を渡してDB別にフィルタリングする
+  // DB切替時は useHistory 内の useEffect が自動で再実行されてサイドバーが更新される
+  const {
+    conversations,
+    isLoading: historyLoading,
+    error: historyError,
+    refreshHistory,
+    loadConversation,
+  } = useHistory(selectedDbConnectionId)
 
   /**
    * 前回の isLoading 値を保持するref
