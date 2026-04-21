@@ -385,10 +385,9 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     // Step 4: SQL バリデーション + クエリ実行（指定DB接続先で実行）
     // -----------------------------------------------------------------------
     if (!extractedSql) {
-      // SQL が生成されなかった場合（通常は LlmParseError が先にスローされるはず）
-      const errorMsg = 'LLM から SQL が生成されませんでした。'
-      sendSseEvent(res, 'error', { message: errorMsg })
-      _saveAssistantMessage(activeConversationId, fullAssistantText || errorMsg, null, extractedChartType, null, errorMsg)
+      // SQL が生成されなかった場合: LLMのテキスト応答のみで正常終了する。
+      // 質問が曖昧な場合やスキーマに該当テーブルがない場合にLLMがテキストで回答することを許容する。
+      _saveAssistantMessage(activeConversationId, fullAssistantText || '', null, null, null, null)
       return
     }
 

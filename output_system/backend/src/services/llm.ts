@@ -163,6 +163,8 @@ RULES:
    - "pie"  : Proportional data (distribution, share)
    - "table": Complex data, many columns, or when no specific chart is appropriate
 
+IMPORTANT: Always try your best to generate a SQL query. If the user's question is vague or ambiguous, make a reasonable assumption based on the available schema and explain your interpretation. Only respond without SQL if the question is completely unrelated to databases (e.g., greetings, general knowledge questions).
+
 RESPONSE FORMAT:
 First, provide a brief explanation of your approach in the user's language.
 Then, include a JSON code block with EXACTLY this structure:
@@ -432,18 +434,15 @@ export class LlmService {
     // ストリーム完了後: 全テキストから SQL と chart_type を抽出
     const extracted = extractStructuredData(fullText)
 
-    if (!extracted) {
-      throw new LlmParseError(
-        'LLM のレスポンスから SQL と chart_type を抽出できませんでした。' +
-          'LLM が期待する JSON フォーマットで回答しなかった可能性があります。'
-      )
+    if (extracted) {
+      // SQL を yield
+      yield { type: 'sql', sql: extracted.sql }
+
+      // chart_type を yield
+      yield { type: 'chart_type', chartType: extracted.chartType }
     }
-
-    // SQL を yield
-    yield { type: 'sql', sql: extracted.sql }
-
-    // chart_type を yield
-    yield { type: 'chart_type', chartType: extracted.chartType }
+    // extracted が null の場合はテキスト応答のみ（SQLなし）として正常終了する。
+    // 質問が曖昧な場合や、スキーマに該当テーブルがない場合にLLMがテキストで回答することを許容する。
   }
 
   /**
