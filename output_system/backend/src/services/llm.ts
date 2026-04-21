@@ -11,13 +11,16 @@
  *   - エラーハンドリング（APIキー未設定、APIエラー、タイムアウト）
  *
  * 使用する環境変数:
- *   ANTHROPIC_API_KEY : Anthropic API キー（必須）
- *   ANTHROPIC_MODEL   : 使用するモデル名（省略時: claude-sonnet-4-20250514）
+ *   USE_BEDROCK       : 'true' の場合 Amazon Bedrock 経由で Claude を呼び出す
+ *   AWS_REGION        : Bedrock のリージョン（USE_BEDROCK=true 時に使用、省略時: ap-northeast-1）
+ *   ANTHROPIC_API_KEY : Anthropic API キー（USE_BEDROCK が未設定の場合に必須）
+ *   ANTHROPIC_MODEL   : 使用するモデル名（省略時: 自動選択）
  *
  * 参考: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt
  */
 
 import Anthropic from '@anthropic-ai/sdk'
+import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk'
 import { SchemaInfo } from './schema'
 
 // ---------------------------------------------------------------------------
@@ -72,9 +75,15 @@ export type LlmEvent =
 /**
  * デフォルトモデル名
  * ANTHROPIC_MODEL 環境変数が未設定の場合に使用する。
- * モデルの可搬性のため環境変数での上書きを推奨する。
+ * Bedrock と直接 API でモデル ID の形式が異なる。
  */
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
+const DEFAULT_BEDROCK_MODEL = 'anthropic.claude-sonnet-4-20250514-v1:0'
+
+/**
+ * Bedrock を使用するかどうか
+ */
+const USE_BEDROCK = process.env.USE_BEDROCK === 'true'
 
 /**
  * APIレスポンスの最大トークン数
@@ -256,31 +265,40 @@ export function extractStructuredData(text: string): {
  * ```
  */
 export class LlmService {
-  /** Anthropic クライアントインスタンス */
-  private client: Anthropic
+  /** Anthropic クライアントインスタンス（直接 API または Bedrock） */
+  private client: Anthropic | AnthropicBedrock
 
   /**
    * LlmService コンストラクタ
    *
-   * ANTHROPIC_API_KEY 環境変数からAPIキーを取得してクライアントを初期化する。
-   * APIキーが未設定の場合は LlmConfigError をスローする。
+   * USE_BEDROCK=true の場合: AnthropicBedrock クライアントを初期化（IAM認証）。
+   * それ以外: ANTHROPIC_API_KEY でAnthropicクライアントを初期化。
    *
-   * @throws LlmConfigError - ANTHROPIC_API_KEY が未設定の場合
+   * @throws LlmConfigError - 直接API時に ANTHROPIC_API_KEY が未設定の場合
    */
   constructor() {
-    const apiKey = process.env.ANTHROPIC_API_KEY
+    if (USE_BEDROCK) {
+      // Bedrock: IAM認証（ECSタスクロール or 環境変数の AWS_ACCESS_KEY_ID 等）
+      const awsRegion = process.env.AWS_REGION || 'ap-northeast-1'
+      this.client = new AnthropicBedrock({
+        awsRegion,
+        timeout: REQUEST_TIMEOUT_MS,
+      })
+    } else {
+      // 直接API: APIキー認証
+      const apiKey = process.env.ANTHROPIC_API_KEY
 
-    if (!apiKey || apiKey.trim() === '') {
-      throw new LlmConfigError(
-        'ANTHROPIC_API_KEY が設定されていません。環境変数に Anthropic API キーを設定してください。'
-      )
+      if (!apiKey || apiKey.trim() === '') {
+        throw new LlmConfigError(
+          'ANTHROPIC_API_KEY が設定されていません。環境変数に Anthropic API キーを設定するか、USE_BEDROCK=true で Bedrock を使用してください。'
+        )
+      }
+
+      this.client = new Anthropic({
+        apiKey,
+        timeout: REQUEST_TIMEOUT_MS,
+      })
     }
-
-    this.client = new Anthropic({
-      apiKey,
-      // タイムアウト設定（ミリ秒）
-      timeout: REQUEST_TIMEOUT_MS,
-    })
   }
 
   /**
@@ -329,8 +347,8 @@ export class LlmService {
     const userMessage = `## Database Schema\n\n${schemaText}\n\n## Question\n\n${question}`
     messages.push({ role: 'user', content: userMessage })
 
-    // 使用するモデル名（環境変数で上書き可能）
-    const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL
+    // 使用するモデル名（環境変数で上書き可能、Bedrock/直接APIで形式が異なる）
+    const model = process.env.ANTHROPIC_MODEL || (USE_BEDROCK ? DEFAULT_BEDROCK_MODEL : DEFAULT_MODEL)
 
     // Claude API にストリーミングリクエストを送信
     let stream: ReturnType<typeof this.client.messages.stream>

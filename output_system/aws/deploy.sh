@@ -1,17 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# DataAgent ECS Fargate Deploy Script
+# DataAgent ECS Fargate Deploy Script (Bedrock)
 #
 # Usage:
 #   ./deploy.sh --region ap-northeast-1 \
 #               --vpc-id vpc-xxxxxxxx \
-#               --subnet-ids "subnet-aaa,subnet-bbb" \
-#               --api-key sk-ant-xxxxx
+#               --subnet-ids "subnet-aaa,subnet-bbb"
 #
 # Prerequisites:
 #   - AWS CLI v2 configured (aws configure)
 #   - Docker installed and running
-#   - Sufficient IAM permissions (ECS, ECR, EFS, ALB, IAM, CloudWatch)
+#   - Amazon Bedrock Claude model access enabled in the target region
+#   - Sufficient IAM permissions (ECS, ECR, EFS, ALB, IAM, CloudWatch, Bedrock)
 # =============================================================================
 set -euo pipefail
 
@@ -36,7 +36,6 @@ while [[ $# -gt 0 ]]; do
     --region)        REGION="$2";              shift 2;;
     --vpc-id)        VPC_ID="$2";              shift 2;;
     --subnet-ids)    SUBNET_IDS="$2";          shift 2;;
-    --api-key)       ANTHROPIC_API_KEY="$2";   shift 2;;
     --stack-name)    STACK_NAME="$2";          shift 2;;
     --cpu)           TASK_CPU="$2";            shift 2;;
     --memory)        TASK_MEMORY="$2";         shift 2;;
@@ -45,15 +44,14 @@ while [[ $# -gt 0 ]]; do
     --mysql-password) MYSQL_ROOT_PASSWORD="$2"; shift 2;;
     --image-tag)     IMAGE_TAG="$2";           shift 2;;
     -h|--help)
-      echo "Usage: $0 --region REGION --vpc-id VPC_ID --subnet-ids SUBNET_IDS --api-key API_KEY [options]"
+      echo "Usage: $0 --region REGION --vpc-id VPC_ID --subnet-ids SUBNET_IDS [options]"
       echo ""
       echo "Required:"
-      echo "  --region          AWS region (default: ap-northeast-1)"
       echo "  --vpc-id          Existing VPC ID"
       echo "  --subnet-ids      Comma-separated subnet IDs (at least 2, different AZs)"
-      echo "  --api-key         Anthropic API key"
       echo ""
       echo "Optional:"
+      echo "  --region          AWS region (default: ap-northeast-1)"
       echo "  --stack-name      CloudFormation stack name (default: dataagent)"
       echo "  --cpu             Task CPU units: 512|1024|2048|4096 (default: 1024)"
       echo "  --memory          Task memory MB: 1024-8192 (default: 2048)"
@@ -67,7 +65,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required params
-for var in VPC_ID SUBNET_IDS ANTHROPIC_API_KEY; do
+for var in VPC_ID SUBNET_IDS; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: --$(echo $var | tr '[:upper:]' '[:lower:]' | tr '_' '-') is required"
     exit 1
@@ -78,7 +76,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region 
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO_NAME}"
 
 echo "============================================"
-echo "DataAgent ECS Fargate Deployment"
+echo "DataAgent ECS Fargate Deployment (Bedrock)"
 echo "============================================"
 echo "Region:     $REGION"
 echo "Account:    $ACCOUNT_ID"
@@ -87,6 +85,7 @@ echo "VPC:        $VPC_ID"
 echo "Subnets:    $SUBNET_IDS"
 echo "ECR:        $ECR_URI"
 echo "CPU/Memory: ${TASK_CPU}/${TASK_MEMORY}"
+echo "LLM:        Amazon Bedrock (IAM auth)"
 echo "============================================"
 
 # ---------------------------------------------------------------------------
@@ -137,7 +136,6 @@ aws cloudformation deploy \
   --parameter-overrides \
     VpcId="$VPC_ID" \
     SubnetIds="$SUBNET_IDS" \
-    AnthropicApiKey="$ANTHROPIC_API_KEY" \
     DbEncryptionKey="$DB_ENCRYPTION_KEY" \
     MysqlRootPassword="$MYSQL_ROOT_PASSWORD" \
     WebImageUri="${ECR_URI}:${IMAGE_TAG}" \
@@ -162,6 +160,10 @@ echo "============================================"
 echo "DataAgent is deploying to ECS Fargate!"
 echo ""
 echo "Access URL: $ALB_DNS"
+echo ""
+echo "Note: LLM is powered by Amazon Bedrock (IAM auth)."
+echo "      Make sure Claude model access is enabled in $REGION."
+echo "      https://console.aws.amazon.com/bedrock/home#/modelaccess"
 echo ""
 echo "Check service status:"
 echo "  aws ecs describe-services --cluster dataagent-cluster --services dataagent-service --region $REGION"

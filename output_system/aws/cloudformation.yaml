@@ -16,11 +16,6 @@ Parameters:
     Type: List<AWS::EC2::Subnet::Id>
     Description: At least 2 subnets in different AZs (for ALB)
 
-  AnthropicApiKey:
-    Type: String
-    NoEcho: true
-    Description: Anthropic Claude API key
-
   DbEncryptionKey:
     Type: String
     NoEcho: true
@@ -239,6 +234,16 @@ Resources:
             Principal:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bedrock-invoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: 'arn:aws:bedrock:*::foundation-model/anthropic.*'
 
   # ===========================================================================
   # ALB (Application Load Balancer)
@@ -407,8 +412,10 @@ Resources:
             - ContainerName: mysql
               Condition: HEALTHY
           Environment:
-            - Name: ANTHROPIC_API_KEY
-              Value: !Ref AnthropicApiKey
+            - Name: USE_BEDROCK
+              Value: 'true'
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
             - Name: DB_ENCRYPTION_KEY
               Value: !Ref DbEncryptionKey
             - Name: DB_TYPE

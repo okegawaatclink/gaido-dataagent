@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.28.1",
     "@anthropic-ai/sdk": "^0.89.0",
     "better-sqlite3": "^12.9.0",
     "cors": "^2.8.5",
