@@ -142,3 +142,4 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #12: 会話・メッセージがSQLiteに保存される（better-sqlite3、historyDb.ts、Repository Pattern、GET/DELETE /api/history、conversationイベント追加、125件ユニットテスト）
 - PBI #13: サイドバーから履歴を閲覧・選択・削除できる（useHistory.ts、Sidebar/HistoryItem.tsx実装、App.tsx統合、自動リフレッシュ、検索フィルタ、E2Eテスト7件）
 - PBI #146: SQLiteが起動時に自動初期化される（db_connectionsテーブル追加、conversations.db_connection_id FK追加、Repository関数追加、180件ユニットテスト全通過）
+- PBI #147: DB接続先のCRUD APIが動作する（encryption.ts AES-256-GCM暗号化、connectionManager.ts CRUD+接続テスト、/api/connections エンドポイント5本、227件ユニットテスト全通過）
