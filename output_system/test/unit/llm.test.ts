@@ -31,6 +31,7 @@ import type { SchemaInfo } from '../../backend/src/services/schema'
 /** テスト用スキーマ情報 */
 const mockSchema: SchemaInfo = {
   database: 'testdb',
+  dbType: 'mysql',
   tables: [
     {
       name: 'orders',
@@ -159,7 +160,7 @@ describe('schemaToPromptText', () => {
    * 【期待結果】データベース名のみが出力されること
    */
   it('should handle empty tables array gracefully', () => {
-    const emptySchema: SchemaInfo = { database: 'emptydb', tables: [] }
+    const emptySchema: SchemaInfo = { database: 'emptydb', dbType: 'mysql', tables: [] }
     const result = schemaToPromptText(emptySchema)
     expect(result).toContain('Database: emptydb')
     expect(result).not.toContain('Table:')

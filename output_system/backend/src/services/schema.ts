@@ -50,6 +50,7 @@ export interface TableInfo {
 /** スキーマ情報レスポンス */
 export interface SchemaInfo {
   database: string
+  dbType: 'mysql' | 'postgresql'
   tables: TableInfo[]
 }
 
@@ -199,7 +200,7 @@ async function fetchSchemaPostgresql(
     ORDER BY c.table_name, c.ordinal_position
   `)
 
-  return buildSchemaInfo(database, rows.rows)
+  return buildSchemaInfo(database, rows.rows, 'postgresql')
 }
 
 /**
@@ -235,7 +236,7 @@ async function fetchSchemaMysql(
     ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION
   `)
 
-  return buildSchemaInfo(database, rows)
+  return buildSchemaInfo(database, rows, 'mysql')
 }
 
 // =============================================================================
@@ -253,7 +254,8 @@ async function fetchSchemaMysql(
  */
 export function buildSchemaInfo(
   database: string,
-  rows: InformationSchemaColumn[]
+  rows: InformationSchemaColumn[],
+  dbType: 'mysql' | 'postgresql' = 'mysql'
 ): SchemaInfo {
   // テーブル名をキーとしたMapを使い、カラムとテーブルコメントをグループ化
   const tableMap = new Map<string, { comment: string | null; columns: ColumnInfo[] }>()
@@ -277,7 +279,7 @@ export function buildSchemaInfo(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, info]) => ({ name, comment: info.comment, columns: info.columns }))
 
-  return { database, tables }
+  return { database, dbType, tables }
 }
 
 // =============================================================================

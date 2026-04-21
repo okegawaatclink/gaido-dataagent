@@ -333,6 +333,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
       const generator = llmService.generate({
         question: message.trim(),
         schema,
+        dbType: schema.dbType,
         conversationHistory,
       })
 

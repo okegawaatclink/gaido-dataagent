@@ -45,6 +45,8 @@ export interface LlmGenerateInput {
   question: string
   /** DBスキーマ情報（INFORMATION_SCHEMA から取得済み） */
   schema: SchemaInfo
+  /** DB種別（mysql / postgresql）。SQL方言の選択に使用 */
+  dbType: 'mysql' | 'postgresql'
   /** 会話履歴（直近のやり取り。省略時は単発の質問として扱う） */
   conversationHistory?: ConversationMessage[]
 }
@@ -126,13 +128,30 @@ const REQUEST_TIMEOUT_MS = 60_000
  *   }
  *   ```
  */
-const SYSTEM_PROMPT = `You are a helpful data analyst assistant. Your role is to translate natural language questions into SQL queries for data visualization.
+/**
+ * システムプロンプトを生成する
+ *
+ * DB種別に応じたSQL方言指示を含める。
+ * スキーマに含まれるコメント情報の活用を明示的に指示する。
+ *
+ * @param dbType - DB種別（mysql / postgresql）
+ * @returns システムプロンプト文字列
+ */
+function buildSystemPrompt(dbType: 'mysql' | 'postgresql'): string {
+  const dialectName = dbType === 'mysql' ? 'MySQL' : 'PostgreSQL'
+
+  return `You are a helpful data analyst assistant. Your role is to translate natural language questions into SQL queries for data visualization.
+
+DATABASE TYPE: ${dialectName}
+Generate SQL that is fully compatible with ${dialectName} syntax. Do NOT use syntax from other databases (SQLite, SQL Server, Oracle, etc.).
+${dbType === 'mysql' ? '- Use backticks (\\`) for identifier quoting.\n- Use LIMIT (not TOP or FETCH FIRST).\n- Use IFNULL() instead of COALESCE() where appropriate.' : '- Use double quotes (") for identifier quoting if needed.\n- Use LIMIT or FETCH FIRST.\n- Use COALESCE() for null handling.'}
 
 RULES:
 1. Generate ONLY SELECT statements. Never generate INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE, or any other DDL/DML statements.
-2. Use ONLY the tables and columns provided in the schema information.
-3. Generate queries optimized for visualization (aggregations, rankings, time series, etc.).
-4. Choose the most appropriate chart type:
+2. **CRITICAL: Use ONLY the tables and columns listed in the schema information below. NEVER reference tables or columns that are not in the schema. If a table or column does not appear in the schema, it does not exist.**
+3. **Pay close attention to table comments and column comments in the schema. They describe the meaning, unit, and purpose of each table and column. Use them to understand what data each column contains and generate accurate queries.**
+4. Generate queries optimized for visualization (aggregations, rankings, time series, etc.).
+5. Choose the most appropriate chart type:
    - "bar"  : Category comparisons (rankings, totals by category)
    - "line" : Time series data (trends over time)
    - "pie"  : Proportional data (distribution, share)
@@ -150,6 +169,7 @@ Then, include a JSON code block with EXACTLY this structure:
 \`\`\`
 
 The JSON must always be at the end of your response.`
+}
 
 // ---------------------------------------------------------------------------
 // ユーティリティ関数
@@ -168,7 +188,8 @@ The JSON must always be at the end of your response.`
  * // => "Database: mydb\n\nTable: users\n  - id (integer, NOT NULL)\n  - name (text, NULL)..."
  */
 export function schemaToPromptText(schema: SchemaInfo): string {
-  const lines: string[] = [`Database: ${schema.database}`, '']
+  const dbTypeLabel = schema.dbType === 'mysql' ? 'MySQL' : 'PostgreSQL'
+  const lines: string[] = [`Database: ${schema.database} (${dbTypeLabel})`, '']
 
   for (const table of schema.tables) {
     const tableHeader = table.comment
@@ -317,7 +338,7 @@ export class LlmService {
    * @throws LlmParseError - LLMレスポンスから SQL / chart_type を抽出できなかった場合
    */
   async *generate(input: LlmGenerateInput): AsyncGenerator<LlmEvent> {
-    const { question, schema, conversationHistory } = input
+    const { question, schema, dbType, conversationHistory } = input
 
     // スキーマ情報をプロンプトテキストに変換
     const schemaText = schemaToPromptText(schema)
@@ -357,7 +378,7 @@ export class LlmService {
       stream = this.client.messages.stream({
         model,
         max_tokens: MAX_TOKENS,
-        system: SYSTEM_PROMPT,
+        system: buildSystemPrompt(dbType),
         messages,
       })
     } catch (err) {
