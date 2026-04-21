@@ -117,6 +117,9 @@ npx playwright test test/e2e/app.spec.ts
 - **コピー機能の実装**: Clipboard APIは`window.isSecureContext`が必要。HTTP環境（コンテナ名アクセス）では使えないため、execCommandフォールバックを用意した
 - **strict modeとPlaywright**: `page.locator()`は複数マッチするとstrict modeでエラーになる。`.first()`や`.filter()`で一意に絞ること
 - **db_connection_id のNULL許容設計**: SQLite本来のdb.md定義はNOT NULLだが、後続PBI（#147 DB接続先管理）が実装されるまでchat.ts側がdb_connection_idを知らないため暫定的にNULL許容とした。後続PBI実装時にNOT NULL化が必要
+- **schema.ts キャッシュ戦略**: `Map<dbConnectionId, SchemaInfo>` によるサーバー再起動まで有効のインメモリキャッシュを採用。TTLキャッシュやRedisは過剰のため不採用。接続先更新・削除時に `invalidateSchemaCache()` を呼んで整合性を確保する
+- **database.ts 接続プール管理**: `Map<dbConnectionId, KnexType>` で管理する接続プールを採用。同じ接続先への繰り返しクエリで接続コストを削減。スキーマ取得（schema.ts）は専用の短命インスタンスで都度接続・破棄する設計（スキーマは頻度低いため）
+- **Vitestのvi.clearAllMocks()とモジュールレベルMap**: `database.ts` はモジュールレベルの `connectionPool` Map を持つ。Vitestテストでは各テストで別の `dbConnectionId` を使用してプールの干渉を避けること。`destroyAllConnections()` を `afterEach` で呼んでもVitestのモジュールキャッシュ（未リビルド状態）では反映されない場合がある
 
 ## はまりポイント
 
@@ -144,3 +147,5 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #146: SQLiteが起動時に自動初期化される（db_connectionsテーブル追加、conversations.db_connection_id FK追加、Repository関数追加、180件ユニットテスト全通過）
 - PBI #147: DB接続先のCRUD APIが動作する（encryption.ts AES-256-GCM暗号化、connectionManager.ts CRUD+接続テスト、/api/connections エンドポイント5本、227件ユニットテスト全通過）
 - PBI #148: DB管理モーダルからDB接続先を操作できる（useDbConnections hook、Toast/useToast、DbManagementModal/DbConnectionList/DbConnectionForm、App.tsxに「管理」ボタン追加、バリデーション・確認ダイアログ・Toastによる結果通知）
+- PBI #149: 選択中DB接続先で自然言語SQL生成・実行ができる（schema.ts動的接続+メモリキャッシュ、database.ts接続プール管理、routes/schema.ts dbConnectionId必須化、routes/chat.ts dbConnectionId受け取り、App.tsx DB選択ドロップダウン、ChatContainer未選択時入力無効化、216件ユニットテスト全通過）
+- PBI #150: SQL実行結果をグラフ・テーブルで切り替え表示できる（ChartRenderer/BarChart/LineChart/PieChart/DataTable/chartUtils.ts実装済み確認。既存コンポーネントが正しく機能することを動作確認。160件ユニットテスト全通過）
