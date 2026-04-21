@@ -78,7 +78,7 @@ export type LlmEvent =
  * Bedrock と直接 API でモデル ID の形式が異なる。
  */
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
-const DEFAULT_BEDROCK_MODEL = 'us.anthropic.claude-sonnet-4-20250514-v1:0'
+const DEFAULT_BEDROCK_MODEL = 'apac.anthropic.claude-sonnet-4-20250514-v1:0'
 
 /**
  * Bedrock を使用するかどうか
