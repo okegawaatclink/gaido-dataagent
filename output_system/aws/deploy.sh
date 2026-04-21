@@ -112,7 +112,9 @@ aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
 # Build image (context = project root, same as docker-compose)
+# --platform linux/amd64: Fargate runs on Linux/amd64, required when building on Apple Silicon Mac
 docker build \
+  --platform linux/amd64 \
   -f "$PROJECT_ROOT/output_system/Dockerfile" \
   -t "${ECR_URI}:${IMAGE_TAG}" \
   "$PROJECT_ROOT"
