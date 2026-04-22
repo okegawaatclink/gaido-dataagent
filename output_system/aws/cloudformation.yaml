@@ -16,11 +16,17 @@ Parameters:
     Type: List<AWS::EC2::Subnet::Id>
     Description: At least 2 subnets in different AZs (for ALB)
 
+  UseBedrock:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Use Amazon Bedrock (true) or direct Anthropic API (false)
+
   AnthropicApiKey:
     Type: String
     NoEcho: true
     Default: ''
-    Description: Anthropic Claude API key (direct API mode)
+    Description: Anthropic Claude API key (required when UseBedrock=false)
 
   DbEncryptionKey:
     Type: String
@@ -432,9 +438,11 @@ Resources:
               Condition: HEALTHY
           Environment:
             - Name: USE_BEDROCK
-              Value: 'true'
+              Value: !Ref UseBedrock
             - Name: AWS_REGION
               Value: !Ref AWS::Region
+            - Name: ANTHROPIC_API_KEY
+              Value: !Ref AnthropicApiKey
             - Name: DB_ENCRYPTION_KEY
               Value: !Ref DbEncryptionKey
             - Name: DB_TYPE

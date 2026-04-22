@@ -27,6 +27,8 @@ TASK_MEMORY="2048"
 CERTIFICATE_ARN=""
 DB_ENCRYPTION_KEY="a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
 MYSQL_ROOT_PASSWORD="rootpassword"
+USE_BEDROCK="false"
+ANTHROPIC_API_KEY=""
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -36,7 +38,8 @@ while [[ $# -gt 0 ]]; do
     --region)        REGION="$2";              shift 2;;
     --vpc-id)        VPC_ID="$2";              shift 2;;
     --subnet-ids)    SUBNET_IDS="$2";          shift 2;;
-    --api-key)       ANTHROPIC_API_KEY="$2";   shift 2;;  # Optional: only for direct API mode
+    --api-key)       ANTHROPIC_API_KEY="$2";   shift 2;;
+    --use-bedrock)   USE_BEDROCK="true";      shift 1;;
     --stack-name)    STACK_NAME="$2";          shift 2;;
     --cpu)           TASK_CPU="$2";            shift 2;;
     --memory)        TASK_MEMORY="$2";         shift 2;;
@@ -53,7 +56,8 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Optional:"
       echo "  --region          AWS region (default: ap-northeast-1)"
-      echo "  --api-key         Anthropic API key (only for direct API mode, not needed for Bedrock)"
+      echo "  --api-key         Anthropic API key (required unless --use-bedrock)"
+      echo "  --use-bedrock     Use Amazon Bedrock instead of direct Anthropic API"
       echo "  --stack-name      CloudFormation stack name (default: dataagent)"
       echo "  --cpu             Task CPU units: 512|1024|2048|4096 (default: 1024)"
       echo "  --memory          Task memory MB: 1024-8192 (default: 2048)"
@@ -74,6 +78,12 @@ for var in VPC_ID SUBNET_IDS; do
   fi
 done
 
+# API key is required unless using Bedrock
+if [[ "$USE_BEDROCK" != "true" && -z "$ANTHROPIC_API_KEY" ]]; then
+  echo "ERROR: --api-key is required (or use --use-bedrock for Amazon Bedrock)"
+  exit 1
+fi
+
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
 ECR_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO_NAME}"
 
@@ -87,7 +97,11 @@ echo "VPC:        $VPC_ID"
 echo "Subnets:    $SUBNET_IDS"
 echo "ECR:        $ECR_URI"
 echo "CPU/Memory: ${TASK_CPU}/${TASK_MEMORY}"
-echo "LLM:        Amazon Bedrock (Claude)"
+if [[ "$USE_BEDROCK" == "true" ]]; then
+  echo "LLM:        Amazon Bedrock (Claude)"
+else
+  echo "LLM:        Anthropic API (direct)"
+fi
 echo "============================================"
 
 # ---------------------------------------------------------------------------
@@ -143,6 +157,8 @@ aws cloudformation deploy \
   --parameter-overrides \
     VpcId="$VPC_ID" \
     SubnetIds="$SUBNET_IDS" \
+    UseBedrock="$USE_BEDROCK" \
+    AnthropicApiKey="${ANTHROPIC_API_KEY:-}" \
     DbEncryptionKey="$DB_ENCRYPTION_KEY" \
     MysqlRootPassword="$MYSQL_ROOT_PASSWORD" \
     WebImageUri="${ECR_URI}:${IMAGE_TAG}" \
@@ -168,7 +184,11 @@ echo "DataAgent is deploying to ECS Fargate!"
 echo ""
 echo "Access URL: $ALB_DNS"
 echo ""
-echo "Note: LLM is powered by Amazon Bedrock (Claude)."
+if [[ "$USE_BEDROCK" == "true" ]]; then
+  echo "Note: LLM is powered by Amazon Bedrock (Claude)."
+else
+  echo "Note: LLM is powered by Anthropic API (direct)."
+fi
 echo ""
 echo "Check service status:"
 echo "  aws ecs describe-services --cluster dataagent-cluster --services dataagent-service --region $REGION"
