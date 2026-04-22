@@ -260,7 +260,9 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
-                Resource: 'arn:aws:bedrock:*::foundation-model/anthropic.*'
+                Resource:
+                  - 'arn:aws:bedrock:*::foundation-model/anthropic.*'
+                  - !Sub 'arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/apac.anthropic.*'
 
   # ===========================================================================
   # ALB (Application Load Balancer)
