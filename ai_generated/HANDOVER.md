@@ -155,3 +155,5 @@ npx playwright test test/e2e/app.spec.ts
 - PBI #150: SQL実行結果をグラフ・テーブルで切り替え表示できる（ChartRenderer/BarChart/LineChart/PieChart/DataTable/chartUtils.ts実装済み確認。既存コンポーネントが正しく機能することを動作確認。160件ユニットテスト全通過）
 - PBI #151: DB切替時にサイドバー会話履歴がDB別フィルタリングされる（historyDb.tsにlistConversationsByDbConnectionId追加、GET /api/historyのdbConnectionId必須化、useHistory dbConnectionId引数対応・DB切替時自動リフレッシュ、HistoryItemにcreatedAt表示追加、App.tsxにDB切替時チャットクリア追加。384件ユニットテスト全通過）
 - PBI #152: DB接続先未登録時に初回起動ガイドが表示される（WelcomeGuide.tsx新規作成、App.tsxにconnections.length===0の条件分岐追加、global.cssにウェルカム画面スタイル追加）
+- PBI #200: GraphQL接続先のCRUD・Introspectionスキーマ取得が動作する（db_connectionsにGraphQL対応カラム追加、schema.tsにGraphQL Introspection対応、フロントエンドの型定義にgraphql追加、DbManagementModalのGraphQLフォーム切替実装）
+- PBI #201: GraphQL APIに自然言語で問い合わせてデータを可視化できる（graphqlValidator.ts・graphqlExecutor.ts新規作成、chat.ts dbType分岐、llm.ts GraphQLシステムプロンプト強化、SQLDisplay labelプロパティ追加、ChatMessage/ChatContainer/App.tsx dbType伝播）

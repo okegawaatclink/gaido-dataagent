@@ -257,6 +257,15 @@ const App: FC = () => {
   }, [fetchConnections])
 
   /**
+   * 選択中のDB接続先のDB種別（PBI #201 追加: GraphQL時のラベル切替用）
+   *
+   * connections と selectedDbConnectionId から選択中の接続情報を検索し、
+   * dbType を返す。未選択または見つからない場合は undefined。
+   * ChatContainer に渡して ChatMessage -> SQLDisplay のラベル切替に使用する。
+   */
+  const selectedDbType = connections.find((c) => c.id === selectedDbConnectionId)?.dbType
+
+  /**
    * チャット送信ハンドラ（PBI #149 追加: dbConnectionId を含めて送信）
    *
    * ChatContainer の onSend は (message: string) のシグネチャだが、
@@ -386,6 +395,7 @@ const App: FC = () => {
                 isLoading={isLoading}
                 onSend={handleSend}
                 isDbConnectionSelected={!!selectedDbConnectionId}
+                selectedDbType={selectedDbType}
               />
             </main>
           </>
