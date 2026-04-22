@@ -18,8 +18,10 @@
 /**
  * サポートするデータベースタイプ
  * knex.js のクライアント識別子に対応する
+ *
+ * PBI #200: 'graphql' を追加（GraphQL APIのIntrospection対応）
  */
-export type DbType = 'postgresql' | 'mysql'
+export type DbType = 'postgresql' | 'mysql' | 'graphql'
 
 /**
  * DB接続設定

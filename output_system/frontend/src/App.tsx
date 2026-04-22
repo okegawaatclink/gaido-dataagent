@@ -303,6 +303,7 @@ const App: FC = () => {
             >
               {connections.map((conn) => (
                 <option key={conn.id} value={conn.id}>
+                  {/* PBI #200: GraphQL接続先は「接続名 (graphql)」形式で表示 */}
                   {conn.name} ({conn.dbType})
                 </option>
               ))}

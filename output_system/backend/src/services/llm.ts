@@ -45,8 +45,8 @@ export interface LlmGenerateInput {
   question: string
   /** DBスキーマ情報（INFORMATION_SCHEMA から取得済み） */
   schema: SchemaInfo
-  /** DB種別（mysql / postgresql）。SQL方言の選択に使用 */
-  dbType: 'mysql' | 'postgresql'
+  /** DB種別（mysql / postgresql / graphql）。SQL方言の選択に使用 */
+  dbType: 'mysql' | 'postgresql' | 'graphql'
   /** 会話履歴（直近のやり取り。省略時は単発の質問として扱う） */
   conversationHistory?: ConversationMessage[]
 }
@@ -134,10 +134,35 @@ const REQUEST_TIMEOUT_MS = 60_000
  * DB種別に応じたSQL方言指示を含める。
  * スキーマに含まれるコメント情報の活用を明示的に指示する。
  *
- * @param dbType - DB種別（mysql / postgresql）
+ * @param dbType - DB種別（mysql / postgresql / graphql）
  * @returns システムプロンプト文字列
  */
-function buildSystemPrompt(dbType: 'mysql' | 'postgresql'): string {
+function buildSystemPrompt(dbType: 'mysql' | 'postgresql' | 'graphql'): string {
+  if (dbType === 'graphql') {
+    return `You are a helpful data analyst assistant. Your role is to help users understand and query GraphQL APIs.
+
+DATABASE TYPE: GraphQL
+The connected data source is a GraphQL API. You can help users understand the schema and formulate GraphQL queries.
+
+SCHEMA INFORMATION:
+The user's message always contains a "Database Schema" section that lists ALL available types and fields. This is the complete and authoritative schema of the connected GraphQL API.
+- **NEVER say you don't have schema information. It is ALWAYS provided in the user's message.**
+- **NEVER ask the user to provide type or field information. You already have it.**
+- Use ONLY the types and fields listed in the "Database Schema" section.
+
+RULES:
+1. When the user asks about data, generate a GraphQL query to fetch it.
+2. Format GraphQL queries in the "sql" block (they will be labeled appropriately in the UI).
+3. Choose the most appropriate chart type for visualization:
+   - "bar"  : Category comparisons
+   - "line" : Time series data
+   - "pie"  : Proportional data
+   - "table": Complex data or when no specific chart is appropriate
+
+IMPORTANT: Always try your best to help the user. If the question is vague, make reasonable assumptions based on the available schema.
+`
+  }
+
   const dialectName = dbType === 'mysql' ? 'MySQL' : 'PostgreSQL'
 
   return `You are a helpful data analyst assistant. Your role is to translate natural language questions into SQL queries for data visualization.

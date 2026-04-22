@@ -7,9 +7,14 @@
  *   - buildSchemaInfo(): 純粋関数のため直接テスト
  *   - invalidateSchemaCache(): キャッシュ無効化の動作確認
  *
+ * PBI #200 追加:
+ *   - GraphQL接続先のスキーマ取得テスト（Introspection Query）
+ *   - MySQL テストの修正（SET NAMES utf8mb4 が raw を1回余分に呼ぶ）
+ *
  * テスト方針:
  *   - connectionManager.getById() をモックして実際のDB接続を行わない
  *   - knex をモックして実際のSQLを実行しない
+ *   - GraphQL Introspection は globalThis.fetch をモックして実際のHTTPリクエストを行わない
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -51,15 +56,18 @@ import Knex from 'knex'
 
 /**
  * DB接続先モックオブジェクトを生成するヘルパー
+ *
+ * PBI #200: GraphQL接続先にも対応（dbType='graphql', endpointUrl を追加）
  */
 function createMockConnection(overrides: Partial<{
   id: string
-  dbType: 'mysql' | 'postgresql'
-  host: string
-  port: number
-  username: string
+  dbType: 'mysql' | 'postgresql' | 'graphql'
+  host: string | null
+  port: number | null
+  username: string | null
   password: string
-  databaseName: string
+  databaseName: string | null
+  endpointUrl: string | null
 }> = {}) {
   return {
     id: 'test-connection-id',
@@ -70,6 +78,7 @@ function createMockConnection(overrides: Partial<{
     username: 'testuser',
     password: 'testpass',
     databaseName: 'testdb',
+    endpointUrl: null,
     isLastUsed: false,
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -243,7 +252,10 @@ describe('fetchSchema', () => {
     ]
 
     // MySQL の knex.raw は [rows, fields] のタプルを返す
-    const mockRaw = vi.fn().mockResolvedValue([mockRows, []])
+    // SET NAMES utf8mb4 も raw を呼ぶため、最初の呼び出しは undefined を返すモック
+    const mockRaw = vi.fn()
+      .mockResolvedValueOnce(undefined) // SET NAMES utf8mb4
+      .mockResolvedValueOnce([mockRows, []]) // INFORMATION_SCHEMA クエリ
     vi.mocked(Knex as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       raw: mockRaw,
       destroy: vi.fn().mockResolvedValue(undefined),
@@ -257,9 +269,12 @@ describe('fetchSchema', () => {
     expect(result.tables[0].columns[0]).toEqual({ name: 'customer_id', type: 'int', nullable: false, comment: null })
     expect(result.tables[0].columns[1]).toEqual({ name: 'first_name', type: 'varchar', nullable: true, comment: null })
 
-    // DATABASE() を含むSQLが実行されていること
-    expect(mockRaw).toHaveBeenCalledOnce()
-    const sqlArg: string = mockRaw.mock.calls[0][0]
+    // raw が2回呼ばれること（1回目: SET NAMES utf8mb4, 2回目: INFORMATION_SCHEMA クエリ）
+    expect(mockRaw).toHaveBeenCalledTimes(2)
+    // 1回目: SET NAMES utf8mb4
+    expect(mockRaw.mock.calls[0][0]).toBe('SET NAMES utf8mb4')
+    // 2回目: INFORMATION_SCHEMA クエリ（DATABASE() を含む）
+    const sqlArg: string = mockRaw.mock.calls[1][0]
     expect(sqlArg).toContain('DATABASE()')
     expect(sqlArg).toContain('information_schema.COLUMNS')
   })
@@ -354,5 +369,172 @@ describe('invalidateSchemaCache', () => {
     // 2回目のfetchSchema（キャッシュが無効化されているのでDBから再取得）
     await fetchSchema('test-connection-id')
     expect(mockRaw).toHaveBeenCalledTimes(2)
+  })
+})
+
+// -------------------------------------------------------------------
+// GraphQL Introspection スキーマ取得のユニットテスト（PBI #200 追加）
+// -------------------------------------------------------------------
+
+/**
+ * 【モジュール】fetchSchema（GraphQL向け）
+ * GraphQL接続先のスキーマ取得（Introspection Query）のテスト
+ *
+ * globalThis.fetch をモックして実際のHTTPリクエストを行わない。
+ */
+describe('fetchSchema (GraphQL)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    clearAllSchemaCache()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /**
+   * 【テスト対象】fetchSchema（GraphQL向け）
+   * 【テスト内容】dbType='graphql' のとき、Introspection Query が実行され SchemaInfo が返ること
+   * 【期待結果】OBJECT型のフィールドが tables として返り、ビルトイン型（__で始まる）は除外されること
+   */
+  it('should fetch GraphQL schema via Introspection Query', async () => {
+    // GraphQL接続先のモック設定
+    const mockConnection = createMockConnection({
+      dbType: 'graphql',
+      host: null,
+      port: null,
+      username: null,
+      databaseName: null,
+      endpointUrl: 'https://api.example.com/graphql',
+    })
+    vi.mocked(getById).mockReturnValue(mockConnection as any)
+
+    // Introspection レスポンスのモック
+    const mockIntrospectionResponse = {
+      data: {
+        __schema: {
+          types: [
+            {
+              name: 'User',
+              kind: 'OBJECT',
+              fields: [
+                {
+                  name: 'id',
+                  type: { name: null, kind: 'NON_NULL', ofType: { name: 'ID', kind: 'SCALAR' } },
+                },
+                {
+                  name: 'name',
+                  type: { name: 'String', kind: 'SCALAR', ofType: null },
+                },
+              ],
+            },
+            {
+              name: 'Query',
+              kind: 'OBJECT',
+              fields: [
+                {
+                  name: 'users',
+                  type: { name: null, kind: 'LIST', ofType: { name: 'User', kind: 'OBJECT' } },
+                },
+              ],
+            },
+            // ビルトイン型（除外されること）
+            {
+              name: '__Schema',
+              kind: 'OBJECT',
+              fields: [],
+            },
+            // SCALAR型（除外されること）
+            {
+              name: 'String',
+              kind: 'SCALAR',
+              fields: null,
+            },
+          ],
+        },
+      },
+    }
+
+    // fetch をモック
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockIntrospectionResponse,
+    } as Response)
+
+    const result: SchemaInfo = await fetchSchema('test-graphql-connection-id')
+
+    // GraphQL接続先のスキーマが正しく取得されること
+    expect(result.dbType).toBe('graphql')
+    expect(result.database).toBe('https://api.example.com/graphql')
+
+    // OBJECT型のみが返り、ビルトイン型とSCALAR型は除外されること
+    expect(result.tables).toHaveLength(2) // User と Query のみ
+    const userType = result.tables.find((t) => t.name === 'User')
+    expect(userType).toBeDefined()
+    expect(userType?.columns).toHaveLength(2)
+    // id フィールドは NON_NULL(ID) → 'ID!'
+    expect(userType?.columns[0]).toEqual({ name: 'id', type: 'ID!', nullable: false, comment: null })
+    // name フィールドは String（nullable）
+    expect(userType?.columns[1]).toEqual({ name: 'name', type: 'String', nullable: true, comment: null })
+
+    // ビルトイン型（__Schema）が除外されていること
+    const builtinType = result.tables.find((t) => t.name === '__Schema')
+    expect(builtinType).toBeUndefined()
+
+    // SCALAR型（String）が除外されていること
+    const scalarType = result.tables.find((t) => t.name === 'String')
+    expect(scalarType).toBeUndefined()
+  })
+
+  /**
+   * 【テスト対象】fetchSchema（GraphQL向け）
+   * 【テスト内容】HTTPエラーが返った場合
+   * 【期待結果】エラーがスローされること
+   */
+  it('should throw error when HTTP response is not ok', async () => {
+    const mockConnection = createMockConnection({
+      dbType: 'graphql',
+      host: null,
+      port: null,
+      username: null,
+      databaseName: null,
+      endpointUrl: 'https://api.example.com/graphql',
+    })
+    vi.mocked(getById).mockReturnValue(mockConnection as any)
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      json: async () => ({ errors: [] }),
+    } as Response)
+
+    await expect(fetchSchema('test-graphql-connection-id')).rejects.toThrow('HTTP 403')
+  })
+
+  /**
+   * 【テスト対象】fetchSchema（GraphQL向け）
+   * 【テスト内容】GraphQL Introspection が無効になっている場合
+   * 【期待結果】エラーがスローされること
+   */
+  it('should throw error when Introspection returns GraphQL errors', async () => {
+    const mockConnection = createMockConnection({
+      dbType: 'graphql',
+      host: null,
+      port: null,
+      username: null,
+      databaseName: null,
+      endpointUrl: 'https://api.example.com/graphql',
+    })
+    vi.mocked(getById).mockReturnValue(mockConnection as any)
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        errors: [{ message: 'Introspection is not allowed' }],
+      }),
+    } as Response)
+
+    await expect(fetchSchema('test-graphql-connection-id')).rejects.toThrow('Introspection')
   })
 })

@@ -76,22 +76,30 @@ export class ConnectionNotFoundError extends Error {
  *
  * パスワードは平文で受け取り、サービス内で暗号化して保存する。
  * APIリクエストボディの型に対応する。
+ *
+ * PBI #200: GraphQL対応
+ * - dbType に 'graphql' を追加
+ * - endpointUrl フィールドを追加（GraphQL時は必須、DB時は不要）
+ * - GraphQL時: host/port/username/password/databaseName は省略可
+ * - DB時: 従来通り host/port/username/databaseName が必須、password は POST で必須
  */
 export interface DbConnectionInput {
   /** 接続名（表示用・UNIQUE制約あり） */
   name: string
-  /** DBタイプ（mysql / postgresql） */
-  dbType: 'mysql' | 'postgresql'
-  /** DBホスト名またはIPアドレス */
-  host: string
-  /** DBポート番号 */
-  port: number
-  /** DBユーザー名 */
-  username: string
-  /** DBパスワード（平文）。更新時はオプション（省略時は既存パスワードを維持） */
+  /** DBタイプ（mysql / postgresql / graphql） */
+  dbType: 'mysql' | 'postgresql' | 'graphql'
+  /** DBホスト名またはIPアドレス（DB時必須、GraphQL時不要） */
+  host?: string
+  /** DBポート番号（DB時必須、GraphQL時不要） */
+  port?: number
+  /** DBユーザー名（DB時必須、GraphQL時不要） */
+  username?: string
+  /** DBパスワード（平文）。更新時はオプション（省略時は既存パスワードを維持）。GraphQL時は不要 */
   password?: string
-  /** データベース名 */
-  databaseName: string
+  /** データベース名（DB時必須、GraphQL時不要） */
+  databaseName?: string
+  /** GraphQLエンドポイントURL（GraphQL時必須、DB時不要） */
+  endpointUrl?: string
 }
 
 /**
@@ -99,22 +107,29 @@ export interface DbConnectionInput {
  *
  * パスワードを含まない安全なレスポンス型。
  * GET /api/connections の一覧取得で使用する。
+ *
+ * PBI #200: GraphQL対応
+ * - dbType に 'graphql' を追加
+ * - endpointUrl フィールドを追加
+ * - GraphQL時: host/port/username/databaseName は null になる
  */
 export interface DbConnectionPublic {
   /** 接続先の一意識別子（UUID） */
   id: string
   /** 接続名 */
   name: string
-  /** DBタイプ */
-  dbType: 'mysql' | 'postgresql'
-  /** DBホスト名 */
-  host: string
-  /** DBポート番号 */
-  port: number
-  /** DBユーザー名 */
-  username: string
-  /** データベース名 */
-  databaseName: string
+  /** DBタイプ（mysql / postgresql / graphql） */
+  dbType: 'mysql' | 'postgresql' | 'graphql'
+  /** DBホスト名（GraphQL時はnull） */
+  host: string | null
+  /** DBポート番号（GraphQL時はnull） */
+  port: number | null
+  /** DBユーザー名（GraphQL時はnull） */
+  username: string | null
+  /** データベース名（GraphQL時はnull） */
+  databaseName: string | null
+  /** GraphQLエンドポイントURL（DB時はnull） */
+  endpointUrl: string | null
   /** 最後に使用したDB フラグ */
   isLastUsed: boolean
   /** 作成日時（ISO 8601形式） */
@@ -143,6 +158,10 @@ export interface ConnectionTestResult {
  * SQLite から取得した生データを API レスポンス用の型に変換する。
  * password_encrypted フィールドは除外する。
  *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql' の場合: endpointUrl を含め、host/port/username/databaseName はnullを返す
+ * - dbType='mysql'/'postgresql' の場合: 従来通り。endpointUrl はnull
+ *
  * @param row - SQLite から取得した DbConnectionRow
  * @returns パスワードを除いた DbConnectionPublic
  */
@@ -150,11 +169,14 @@ function rowToPublic(row: DbConnectionRow): DbConnectionPublic {
   return {
     id: row.id,
     name: row.name,
-    dbType: row.db_type as 'mysql' | 'postgresql',
-    host: row.host,
-    port: row.port,
-    username: row.username,
-    databaseName: row.database_name,
+    dbType: row.db_type as 'mysql' | 'postgresql' | 'graphql',
+    // GraphQL時はnull（DB時は値が入る）
+    host: row.host ?? null,
+    port: row.port ?? null,
+    username: row.username ?? null,
+    databaseName: row.database_name ?? null,
+    // GraphQL時はエンドポイントURL（DB時はnull）
+    endpointUrl: row.endpoint_url ?? null,
     // SQLite では BOOLEAN を INTEGER（0/1）で保存しているため変換
     isLastUsed: row.is_last_used === 1,
     createdAt: row.created_at,
@@ -172,12 +194,17 @@ function rowToPublic(row: DbConnectionRow): DbConnectionPublic {
  * パスワードを AES-256-GCM で暗号化してから SQLite に保存する。
  * 接続名が重複する場合は DuplicateConnectionNameError をスローする。
  *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql' の場合: endpointUrl を保存、host/port/username/password/databaseName はNULL
+ * - dbType='mysql'/'postgresql' の場合: 従来通り
+ *
  * @param input - 接続先情報（パスワードは平文で受け取る）
  * @returns 登録された接続先情報（パスワードなし）
  * @throws DuplicateConnectionNameError 接続名が重複する場合
  *
  * @example
  * ```typescript
+ * // DB接続先の登録
  * const connection = await create({
  *   name: '本番DB',
  *   dbType: 'postgresql',
@@ -187,27 +214,50 @@ function rowToPublic(row: DbConnectionRow): DbConnectionPublic {
  *   password: 'mypassword',
  *   databaseName: 'production',
  * })
+ *
+ * // GraphQL接続先の登録
+ * const graphqlConnection = await create({
+ *   name: 'My GraphQL API',
+ *   dbType: 'graphql',
+ *   endpointUrl: 'https://api.example.com/graphql',
+ * })
  * ```
  */
 export function create(input: DbConnectionInput): DbConnectionPublic {
   const db = getHistoryDb()
   const id = uuidv4()
 
-  // パスワードを暗号化（平文パスワードは保存しない）
-  const passwordEncrypted = encrypt(input.password ?? '')
-
   try {
-    const row = createDbConnection(db, {
-      id,
-      name: input.name,
-      db_type: input.dbType,
-      host: input.host,
-      port: input.port,
-      username: input.username,
-      password_encrypted: passwordEncrypted,
-      database_name: input.databaseName,
-    })
-    return rowToPublic(row)
+    if (input.dbType === 'graphql') {
+      // GraphQL接続先: endpointUrl のみ保存。host/port/username/password/databaseName はNULL
+      const row = createDbConnection(db, {
+        id,
+        name: input.name,
+        db_type: input.dbType,
+        host: null,
+        port: null,
+        username: null,
+        password_encrypted: null,
+        database_name: null,
+        endpoint_url: input.endpointUrl,
+      })
+      return rowToPublic(row)
+    } else {
+      // DB接続先（MySQL/PostgreSQL）: 従来通り、パスワードを暗号化して保存
+      const passwordEncrypted = encrypt(input.password ?? '')
+      const row = createDbConnection(db, {
+        id,
+        name: input.name,
+        db_type: input.dbType,
+        host: input.host,
+        port: input.port,
+        username: input.username,
+        password_encrypted: passwordEncrypted,
+        database_name: input.databaseName,
+        endpoint_url: null,
+      })
+      return rowToPublic(row)
+    }
   } catch (err) {
     // SQLite の UNIQUE 制約違反エラーを DuplicateConnectionNameError に変換する
     // better-sqlite3 では UNIQUE 制約違反は "UNIQUE constraint failed" メッセージで通知される
@@ -244,6 +294,10 @@ export function getAll(): DbConnectionPublic[] {
  * 内部利用のみ（チャットAPI等で実際にDB接続する場合）。
  * APIレスポンスにはこの関数の戻り値を直接返さないこと。
  *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql' の場合: password は空文字（暗号化不要）、endpointUrl を含む
+ * - dbType='mysql'/'postgresql' の場合: 従来通り
+ *
  * @param id - 取得する接続先ID
  * @returns 接続先情報（復号済みパスワード含む）
  * @throws ConnectionNotFoundError 指定IDの接続先が存在しない場合
@@ -252,7 +306,12 @@ export function getAll(): DbConnectionPublic[] {
  * ```typescript
  * // チャットAPI内での使用例
  * const conn = getById(dbConnectionId)
- * const knexInstance = buildKnexInstance(conn.dbType, conn.host, conn.port, conn.username, conn.password, conn.databaseName)
+ * if (conn.dbType === 'graphql') {
+ *   // GraphQL APIへのIntrospection等
+ *   const endpoint = conn.endpointUrl
+ * } else {
+ *   const knexInstance = buildKnexInstance(conn.dbType, conn.host!, conn.port!, ...)
+ * }
  * ```
  */
 export function getById(id: string): DbConnectionPublic & { password: string } {
@@ -263,8 +322,8 @@ export function getById(id: string): DbConnectionPublic & { password: string } {
     throw new ConnectionNotFoundError(id)
   }
 
-  // パスワードを復号して返す（内部利用のみ）
-  const password = decrypt(row.password_encrypted)
+  // GraphQL接続先の場合はパスワード復号をスキップ（password_encryptedはNULL）
+  const password = row.password_encrypted ? decrypt(row.password_encrypted) : ''
 
   return {
     ...rowToPublic(row),
@@ -278,6 +337,10 @@ export function getById(id: string): DbConnectionPublic & { password: string } {
  * 指定されたフィールドのみ更新する（パスワードは指定時のみ再暗号化）。
  * 接続名が重複する場合は DuplicateConnectionNameError をスローする。
  *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql' の場合: endpointUrl を更新、host/port/username/password/databaseName はNULL
+ * - dbType='mysql'/'postgresql' の場合: 従来通り。endpointUrl はNULL
+ *
  * @param id - 更新する接続先ID
  * @param input - 更新情報（パスワードは省略可。省略時は既存パスワードを維持）
  * @returns 更新後の接続先情報（パスワードなし）
@@ -286,11 +349,14 @@ export function getById(id: string): DbConnectionPublic & { password: string } {
  *
  * @example
  * ```typescript
- * // パスワード変更なし
- * const updated = update('uuid-xxx', { name: '新名前', host: 'new.host.com', ... })
+ * // DB接続先のパスワード変更なし更新
+ * const updated = update('uuid-xxx', { name: '新名前', dbType: 'mysql', host: 'new.host.com', ... })
  *
- * // パスワード変更あり
+ * // DB接続先のパスワード変更あり更新
  * const updated = update('uuid-xxx', { ..., password: 'newpassword' })
+ *
+ * // GraphQL接続先の更新
+ * const updated = update('uuid-xxx', { name: 'New API', dbType: 'graphql', endpointUrl: 'https://new.api.com/graphql' })
  * ```
  */
 export function update(id: string, input: DbConnectionInput): DbConnectionPublic {
@@ -302,40 +368,66 @@ export function update(id: string, input: DbConnectionInput): DbConnectionPublic
     throw new ConnectionNotFoundError(id)
   }
 
-  // パスワードの処理:
-  // - input.password が指定されている場合は再暗号化
-  // - 省略されている場合は既存の暗号化済みパスワードをそのまま使用
-  const passwordEncrypted =
-    input.password !== undefined
-      ? encrypt(input.password)
-      : existing.password_encrypted
-
   const now = new Date().toISOString()
 
   try {
-    const stmt = db.prepare(`
-      UPDATE db_connections
-      SET name = @name,
-          db_type = @db_type,
-          host = @host,
-          port = @port,
-          username = @username,
-          password_encrypted = @password_encrypted,
-          database_name = @database_name,
-          updated_at = @updated_at
-      WHERE id = @id
-    `)
-    stmt.run({
-      id,
-      name: input.name,
-      db_type: input.dbType,
-      host: input.host,
-      port: input.port,
-      username: input.username,
-      password_encrypted: passwordEncrypted,
-      database_name: input.databaseName,
-      updated_at: now,
-    })
+    if (input.dbType === 'graphql') {
+      // GraphQL接続先の更新: endpointUrl のみ更新、host/port/username/password/databaseName はNULL
+      const stmt = db.prepare(`
+        UPDATE db_connections
+        SET name = @name,
+            db_type = @db_type,
+            host = NULL,
+            port = NULL,
+            username = NULL,
+            password_encrypted = NULL,
+            database_name = NULL,
+            endpoint_url = @endpoint_url,
+            updated_at = @updated_at
+        WHERE id = @id
+      `)
+      stmt.run({
+        id,
+        name: input.name,
+        db_type: input.dbType,
+        endpoint_url: input.endpointUrl ?? null,
+        updated_at: now,
+      })
+    } else {
+      // DB接続先（MySQL/PostgreSQL）の更新: 従来通り
+      // パスワードの処理:
+      // - input.password が指定されている場合は再暗号化
+      // - 省略されている場合は既存の暗号化済みパスワードをそのまま使用
+      const passwordEncrypted =
+        input.password !== undefined
+          ? encrypt(input.password)
+          : existing.password_encrypted
+
+      const stmt = db.prepare(`
+        UPDATE db_connections
+        SET name = @name,
+            db_type = @db_type,
+            host = @host,
+            port = @port,
+            username = @username,
+            password_encrypted = @password_encrypted,
+            database_name = @database_name,
+            endpoint_url = NULL,
+            updated_at = @updated_at
+        WHERE id = @id
+      `)
+      stmt.run({
+        id,
+        name: input.name,
+        db_type: input.dbType,
+        host: input.host ?? null,
+        port: input.port ?? null,
+        username: input.username ?? null,
+        password_encrypted: passwordEncrypted,
+        database_name: input.databaseName ?? null,
+        updated_at: now,
+      })
+    }
   } catch (err) {
     // SQLite の UNIQUE 制約違反エラーを DuplicateConnectionNameError に変換する
     if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
@@ -407,19 +499,20 @@ export function setLastUsed(id: string): void {
 // =============================================================================
 
 /**
- * 指定した接続情報でDB接続テストを行う
+ * 指定した接続情報でDB/GraphQL接続テストを行う
  *
- * knex.js を使って MySQL / PostgreSQL に実際に接続し、
- * 簡単なクエリ（SELECT 1）を実行して接続可否を確認する。
+ * DB接続（MySQL/PostgreSQL）: knex.js を使って実際に接続し、SELECT 1 を実行して接続可否を確認する。
+ * GraphQL接続: Introspection Query（{ __schema { types { name } } }）を実行して接続可否を確認する。
  *
  * タイムアウト: 5秒（接続待ちが長引かないよう制限）
- * knex インスタンスはテスト後に即 destroy する（リソースリーク防止）。
+ * DB接続テスト用の knex インスタンスはテスト後に即 destroy する（リソースリーク防止）。
  *
  * @param input - 接続先情報（パスワードは平文で受け取る）
  * @returns 接続テスト結果（成功フラグとメッセージ）
  *
  * @example
  * ```typescript
+ * // DB接続テスト
  * const result = await testConnection({
  *   name: 'テスト接続',
  *   dbType: 'postgresql',
@@ -430,10 +523,23 @@ export function setLastUsed(id: string): void {
  *   databaseName: 'mydb',
  * })
  * // => { success: true, message: 'Connection successful.' }
- * // => { success: false, message: 'Connection failed: ...' }
+ *
+ * // GraphQL接続テスト
+ * const result = await testConnection({
+ *   name: 'My GraphQL API',
+ *   dbType: 'graphql',
+ *   endpointUrl: 'https://api.example.com/graphql',
+ * })
+ * // => { success: true, message: 'GraphQL Introspection successful.' }
  * ```
  */
 export async function testConnection(input: DbConnectionInput): Promise<ConnectionTestResult> {
+  // GraphQL接続テスト: Introspection Query を実行
+  if (input.dbType === 'graphql') {
+    return testGraphQLConnection(input.endpointUrl ?? '')
+  }
+
+  // DB接続テスト（MySQL/PostgreSQL）: knex.js で SELECT 1 を実行
   // knex クライアント識別子のマッピング
   // mysql → mysql2（knex v3では mysql2 を推奨）
   // postgresql → pg
@@ -493,5 +599,109 @@ export async function testConnection(input: DbConnectionInput): Promise<Connecti
     // テスト後は必ず knex インスタンスを破棄してリソースをリリースする
     // destroy() を呼ばないと DB 接続プールが残り続けてリソースリークが発生する
     await testKnex.destroy()
+  }
+}
+
+/**
+ * GraphQL Introspection Query を実行して接続テストを行う
+ *
+ * Introspection Query（{ __schema { types { name } } }）を指定エンドポイントにPOSTし、
+ * 正常なレスポンスが返ることを確認する。
+ *
+ * タイムアウト: 5秒（AbortSignal.timeout を使用）
+ *
+ * Introspection が無効になっているGraphQL APIへの対応:
+ * - レスポンスに "errors" が含まれ、IntrospectionNotAllowed等のエラーが来る場合は
+ *   「Introspectionが無効」として案内メッセージを返す
+ *
+ * @param endpointUrl - GraphQLエンドポイントURL
+ * @returns 接続テスト結果（成功フラグとメッセージ）
+ */
+async function testGraphQLConnection(endpointUrl: string): Promise<ConnectionTestResult> {
+  if (!endpointUrl) {
+    return {
+      success: false,
+      message: 'エンドポイントURLが指定されていません。',
+    }
+  }
+
+  // 最小限のIntrospection Query（型名リストのみ取得）
+  const introspectionQuery = `{ __schema { types { name } } }`
+
+  try {
+    // Node.js標準のfetchでGraphQLエンドポイントにPOSTリクエストを送信
+    // AbortSignal.timeout でタイムアウト5秒を設定
+    const response = await fetch(endpointUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({ query: introspectionQuery }),
+      signal: AbortSignal.timeout(5000),
+    })
+
+    if (!response.ok) {
+      return {
+        success: false,
+        message: `GraphQL接続に失敗しました: HTTP ${response.status} ${response.statusText}`,
+      }
+    }
+
+    // レスポンスJSONをパース
+    const data = await response.json() as { data?: { __schema?: unknown }; errors?: Array<{ message: string }> }
+
+    // errorsフィールドにIntrospection無効のエラーが含まれる場合は専用メッセージを返す
+    if (data.errors && data.errors.length > 0) {
+      const errorMessages = data.errors.map((e) => e.message).join('; ')
+      const isIntrospectionDisabled = data.errors.some(
+        (e) =>
+          e.message.toLowerCase().includes('introspection') ||
+          e.message.toLowerCase().includes('not allowed') ||
+          e.message.toLowerCase().includes('disabled')
+      )
+      if (isIntrospectionDisabled) {
+        return {
+          success: false,
+          message: `GraphQLエンドポイントへの接続は成功しましたが、Introspectionが無効になっています。GraphQL APIの設定を確認してください。`,
+        }
+      }
+      return {
+        success: false,
+        message: `GraphQL接続エラー: ${errorMessages}`,
+      }
+    }
+
+    // data.__schema が存在すれば成功
+    if (data.data?.__schema) {
+      return {
+        success: true,
+        message: 'GraphQL Introspection successful.',
+      }
+    }
+
+    return {
+      success: false,
+      message: 'GraphQLレスポンスの形式が不正です。エンドポイントURLを確認してください。',
+    }
+  } catch (err) {
+    if (err instanceof Error) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        return {
+          success: false,
+          message: 'GraphQL接続がタイムアウトしました（5秒）。エンドポイントURLを確認してください。',
+        }
+      }
+      console.error('[connectionManager] testGraphQLConnection error:', err)
+      return {
+        success: false,
+        message: `GraphQL接続に失敗しました: ${err.message}`,
+      }
+    }
+    console.error('[connectionManager] testGraphQLConnection unknown error:', err)
+    return {
+      success: false,
+      message: 'GraphQL接続に失敗しました。',
+    }
   }
 }
