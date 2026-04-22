@@ -95,6 +95,7 @@ services:
       PMA_HOST: okegawaatclink-gaido-dataagent-mysql
       PMA_PORT: 3306
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      UPLOAD_LIMIT: 64M
     ports:
       - "${PHPMYADMIN_PORT:-8080}:80"
     depends_on:
