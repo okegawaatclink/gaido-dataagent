@@ -109,6 +109,23 @@ app.get('/api/health', (_req, res) => {
 })
 
 /**
+ * GET /api/config
+ * フロントエンド向けのアプリケーション設定情報
+ * 使用中のLLMバックエンド・モデル名を返す
+ */
+app.get('/api/config', (_req, res) => {
+  const useBedrock = process.env.USE_BEDROCK === 'true'
+  const defaultModel = useBedrock
+    ? 'apac.anthropic.claude-sonnet-4-20250514-v1:0'
+    : 'claude-sonnet-4-20250514'
+  const model = process.env.ANTHROPIC_MODEL || defaultModel
+  res.json({
+    llmBackend: useBedrock ? 'Amazon Bedrock' : 'Anthropic API',
+    llmModel: model,
+  })
+})
+
+/**
  * GET /
  * ルートエンドポイント（APIの存在確認用）
  *

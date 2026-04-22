@@ -60,6 +60,20 @@ import { useDbConnections } from './hooks/useDbConnections'
  * useDbConnections でDB接続先一覧を管理し、選択中のDB接続先をチャットに渡す。
  */
 const App: FC = () => {
+  // LLM情報（バックエンド種別・モデル名）
+  const [llmInfo, setLlmInfo] = useState<string>('')
+
+  useEffect(() => {
+    fetch('/api/config')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.llmBackend && data.llmModel) {
+          setLlmInfo(`${data.llmBackend} / ${data.llmModel}`)
+        }
+      })
+      .catch(() => { /* LLM情報取得失敗は無視 */ })
+  }, [])
+
   // チャット状態（メッセージ、ローディング、conversationId）
   const {
     messages,
@@ -275,6 +289,7 @@ const App: FC = () => {
           {/* PBI 1.1 受入条件: 「DataAgent」見出しが表示されること */}
           <h1 className="app-header__title">DataAgent</h1>
           <span className="app-header__version">{__APP_VERSION__}</span>
+          {llmInfo && <span className="app-header__llm-info">{llmInfo}</span>}
         </div>
         <div className="app-header__right">
           {/* DB接続先選択ドロップダウン（PBI #149 追加） */}

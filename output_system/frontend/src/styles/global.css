@@ -109,6 +109,17 @@ body {
   margin-bottom: 2px;
 }
 
+.app-header__llm-info {
+  font-size: 0.65rem;
+  color: #64748b;
+  font-weight: 400;
+  background: rgba(100, 116, 139, 0.1);
+  padding: 1px 6px;
+  border-radius: 4px;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
 .app-header__right {
   display: flex;
   align-items: center;
