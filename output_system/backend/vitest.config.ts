@@ -21,7 +21,7 @@ export default defineConfig({
       // Task 1.2.4: schema.ts, Task 2.1.1: sqlValidator.ts を含む
       // Task 2.2.1: llm.ts を追加
       // Task 4.1.1: historyDb.ts を追加
-      include: ['src/services/schema.ts', 'src/services/sqlValidator.ts', 'src/services/llm.ts', 'src/services/historyDb.ts', 'src/services/database.ts'],
+      include: ['src/services/schema.ts', 'src/services/sqlValidator.ts', 'src/services/llm.ts', 'src/services/historyDb.ts', 'src/services/database.ts', 'src/services/graphqlValidator.ts', 'src/services/graphqlExecutor.ts'],
       reporter: ['text', 'json', 'html'],
       // 80%以上のカバレッジを要求
       thresholds: {

@@ -3,19 +3,27 @@
  *
  * 自然言語の質問を受け取り、以下の処理を順次行いSSEで結果をストリーミングする:
  *   1. dbConnectionId から DBスキーマ取得（services/schema.ts / キャッシュ優先）
- *   2. Claude API でSQL・グラフ種別を生成（services/llm.ts）
- *   3. SQLバリデーション（services/sqlValidator.ts 経由 / database.executeQuery 内）
- *   4. SQL実行（services/database.ts / 指定DB接続先）
+ *   2. Claude API でクエリ（SQL or GraphQL）・グラフ種別を生成（services/llm.ts）
+ *   3. クエリバリデーション
+ *      - DB 接続の場合: sqlValidator（executeQuery 内の二重防御）
+ *      - GraphQL 接続の場合: graphqlValidator（Mutation/Subscription を拒否）
+ *   4. クエリ実行
+ *      - DB 接続の場合: services/database.ts（指定DB接続先で SQL 実行）
+ *      - GraphQL 接続の場合: services/graphqlExecutor.ts（fetch API で GraphQL 実行）
  *   5. 結果を SSE イベントとして送信
  *
  * PBI #149 改修:
  *   - リクエストボディから dbConnectionId を受け取り、スキーマ取得・クエリ実行に渡す
  *   - dbConnectionId が未指定の場合は 400 エラーを返す
  *
+ * PBI #201 追加:
+ *   - schema.dbType が 'graphql' の場合、SQL 実行パスの代わりに GraphQL 実行パスを使用
+ *   - GraphQL エラー（errors 配列・タイムアウト等）に対応したエラーハンドリングを追加
+ *
  * SSEイベント仕様（api.md参照）:
  *   event: conversation - 会話ID通知（新規会話作成時）
  *   event: message  - LLMが生成したテキストチャンク（逐次送信）
- *   event: sql      - 抽出したSQL文
+ *   event: sql      - 抽出したSQL/GraphQLクエリ文
  *   event: chart_type - 推奨グラフ種別（bar/line/pie/table）
  *   event: result   - クエリ実行結果（QueryResult形式）
  *   event: analysis - AI分析コメントチャンク（逐次送信）
@@ -25,6 +33,7 @@
  * セキュリティ:
  *   - LLMが生成したSQLは sqlValidator（executeQuery内の二重防御）で検証される
  *   - SELECT 以外のSQL（INSERT/DROP等）は event: error で拒否される
+ *   - LLMが生成したGraphQLクエリは graphqlValidator で検証される（Mutation/Subscription拒否）
  *   - エラーメッセージはユーザー向けと内部ログを分離し、内部情報（DBホスト等）の漏洩を防ぐ
  */
 
@@ -34,6 +43,13 @@ import { v4 as uuidv4, validate as uuidValidate } from 'uuid'
 import { fetchSchema, ConnectionNotFoundError as SchemaConnectionNotFoundError } from '../services/schema'
 import { LlmService, LlmConfigError, LlmApiError, LlmTimeoutError, LlmParseError, ConversationMessage } from '../services/llm'
 import { executeQuery, SqlValidationError } from '../services/database'
+import {
+  executeGraphQLQuery,
+  GraphQLValidationError,
+  GraphQLApiError,
+  GraphQLTimeoutError,
+  GraphQLConnectionError,
+} from '../services/graphqlExecutor'
 import {
   getHistoryDb,
   createConversation,
@@ -382,71 +398,171 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
     }
 
     // -----------------------------------------------------------------------
-    // Step 4: SQL バリデーション + クエリ実行（指定DB接続先で実行）
+    // Step 4: クエリバリデーション + 実行
+    // dbType に応じて SQL 実行パスと GraphQL 実行パスを切り替える
     // -----------------------------------------------------------------------
     if (!extractedSql) {
-      // SQL が生成されなかった場合: LLMのテキスト応答のみで正常終了する。
+      // クエリが生成されなかった場合: LLMのテキスト応答のみで正常終了する。
       // 質問が曖昧な場合やスキーマに該当テーブルがない場合にLLMがテキストで回答することを許容する。
       _saveAssistantMessage(activeConversationId, fullAssistantText || '', null, null, null, null)
       return
     }
 
-    try {
-      // executeQuery() 内で sqlValidator が呼ばれる（二重防御）
-      // SELECT 以外のSQL は SqlValidationError をスロー
-      // PBI #149: dbConnectionId を渡して指定DB接続先でクエリを実行
-      const queryResult = await executeQuery(dbConnectionId, extractedSql)
-
-      // クエリ結果を送信
-      sendSseEvent(res, 'result', {
-        columns: queryResult.columns,
-        rows: queryResult.rows,
-        chartType: extractedChartType,
-      })
-
+    if (schema.dbType === 'graphql') {
       // -----------------------------------------------------------------------
-      // Step 5: クエリ結果の分析コメント生成（ストリーミング）
+      // Step 4-GraphQL: GraphQL クエリバリデーション + 実行
+      // PBI #201: GraphQL 接続の場合は graphqlExecutor を使用
       // -----------------------------------------------------------------------
-      let analysisText = ''
       try {
-        const analysisGenerator = llmService.analyzeResults({
-          question: message.trim(),
-          sql: extractedSql,
+        // executeGraphQLQuery() 内で graphqlValidator が呼ばれる（二重防御）
+        // Mutation/Subscription は GraphQLValidationError をスロー
+        const queryResult = await executeGraphQLQuery(
+          // schema.database には GraphQL の場合エンドポイント URL が格納されている
+          schema.database,
+          extractedSql
+        )
+
+        // クエリ結果を送信
+        sendSseEvent(res, 'result', {
           columns: queryResult.columns,
           rows: queryResult.rows,
+          chartType: extractedChartType,
         })
 
-        for await (const chunk of analysisGenerator) {
-          analysisText += chunk
-          sendSseEvent(res, 'analysis', { chunk })
+        // -----------------------------------------------------------------------
+        // Step 5-GraphQL: GraphQL結果の分析コメント生成（ストリーミング）
+        // -----------------------------------------------------------------------
+        let analysisText = ''
+        try {
+          const analysisGenerator = llmService.analyzeResults({
+            question: message.trim(),
+            sql: extractedSql,
+            columns: queryResult.columns,
+            rows: queryResult.rows,
+            dbType: 'graphql',
+          })
+
+          for await (const chunk of analysisGenerator) {
+            analysisText += chunk
+            sendSseEvent(res, 'analysis', { chunk })
+          }
+        } catch (err) {
+          // 分析コメント生成失敗はログに記録するが、メインフローは止めない
+          console.error('[chat] analyzeResults (GraphQL) error:', err)
         }
+
+        // assistant メッセージをDB に保存（sql=GraphQLクエリ, chart_type, query_result, analysis 含む）
+        _saveAssistantMessage(
+          activeConversationId,
+          fullAssistantText,
+          extractedSql,
+          extractedChartType,
+          queryResult,
+          null,
+          analysisText || null
+        )
       } catch (err) {
-        // 分析コメント生成失敗はログに記録するが、メインフローは止めない
-        console.error('[chat] analyzeResults error:', err)
+        // GraphQL バリデーション失敗または実行エラー
+        // 内部エラー詳細はサーバーログに記録
+        console.error('[chat] executeGraphQLQuery error:', err)
+
+        // エラーの種類に応じたガイドメッセージを生成する（Task 5.2.3）
+        let userMessage: string
+        if (err instanceof GraphQLValidationError) {
+          // Mutation/Subscription バリデーションエラー
+          userMessage = err.message
+        } else if (err instanceof GraphQLTimeoutError) {
+          // タイムアウトエラー
+          userMessage = '応答に時間がかかりすぎました。より単純な質問を試してください。'
+        } else if (err instanceof GraphQLApiError) {
+          // GraphQL エラーレスポンス（errors 配列）
+          const firstError = err.errors[0]
+          if (firstError?.message.toLowerCase().includes('syntax') ||
+              firstError?.message.toLowerCase().includes('parse')) {
+            // 構文エラー
+            userMessage = 'クエリの生成に失敗しました。質問を変えてみてください。'
+          } else if (firstError?.message.toLowerCase().includes('field') ||
+                     firstError?.message.toLowerCase().includes('cannot query')) {
+            // フィールドエラー
+            userMessage = '指定されたフィールドが見つかりません。別の質問を試してください。'
+          } else {
+            // その他の GraphQL エラー
+            userMessage = `エラーが発生しました。質問を変えてみてください。`
+          }
+        } else if (err instanceof GraphQLConnectionError) {
+          // 接続エラー（HTTP エラー含む）
+          userMessage = 'GraphQL APIに接続できません。エンドポイントURLを確認してください。'
+        } else {
+          // 予期しないエラー
+          userMessage = 'GraphQLクエリの実行中にエラーが発生しました。質問を変えてみてください。'
+        }
+
+        sendSseEvent(res, 'error', { message: userMessage })
+        _saveAssistantMessage(activeConversationId, fullAssistantText || userMessage, extractedSql, extractedChartType, null, userMessage)
       }
+    } else {
+      // -----------------------------------------------------------------------
+      // Step 4-SQL: SQL バリデーション + クエリ実行（指定DB接続先で実行）
+      // 既存の SQL 実行パス（DB 接続の場合）
+      // -----------------------------------------------------------------------
+      try {
+        // executeQuery() 内で sqlValidator が呼ばれる（二重防御）
+        // SELECT 以外のSQL は SqlValidationError をスロー
+        // PBI #149: dbConnectionId を渡して指定DB接続先でクエリを実行
+        const queryResult = await executeQuery(dbConnectionId, extractedSql)
 
-      // assistant メッセージをDB に保存（sql, chart_type, query_result, analysis 含む）
-      _saveAssistantMessage(
-        activeConversationId,
-        fullAssistantText,
-        extractedSql,
-        extractedChartType,
-        queryResult,
-        null,
-        analysisText || null
-      )
-    } catch (err) {
-      // SQL バリデーション失敗または実行エラー
-      // 内部エラー詳細（DBホスト名等）はサーバーログに記録
-      console.error('[chat] executeQuery error:', err)
+        // クエリ結果を送信
+        sendSseEvent(res, 'result', {
+          columns: queryResult.columns,
+          rows: queryResult.rows,
+          chartType: extractedChartType,
+        })
 
-      const userMessage =
-        err instanceof SqlValidationError
-          ? `SQL バリデーションエラー: ${err.message}`
-          : 'SQL の実行中にエラーが発生しました。'
+        // -----------------------------------------------------------------------
+        // Step 5-SQL: クエリ結果の分析コメント生成（ストリーミング）
+        // -----------------------------------------------------------------------
+        let analysisText = ''
+        try {
+          const analysisGenerator = llmService.analyzeResults({
+            question: message.trim(),
+            sql: extractedSql,
+            columns: queryResult.columns,
+            rows: queryResult.rows,
+            dbType: schema.dbType,
+          })
 
-      sendSseEvent(res, 'error', { message: userMessage })
-      _saveAssistantMessage(activeConversationId, fullAssistantText || userMessage, extractedSql, extractedChartType, null, userMessage)
+          for await (const chunk of analysisGenerator) {
+            analysisText += chunk
+            sendSseEvent(res, 'analysis', { chunk })
+          }
+        } catch (err) {
+          // 分析コメント生成失敗はログに記録するが、メインフローは止めない
+          console.error('[chat] analyzeResults error:', err)
+        }
+
+        // assistant メッセージをDB に保存（sql, chart_type, query_result, analysis 含む）
+        _saveAssistantMessage(
+          activeConversationId,
+          fullAssistantText,
+          extractedSql,
+          extractedChartType,
+          queryResult,
+          null,
+          analysisText || null
+        )
+      } catch (err) {
+        // SQL バリデーション失敗または実行エラー
+        // 内部エラー詳細（DBホスト名等）はサーバーログに記録
+        console.error('[chat] executeQuery error:', err)
+
+        const userMessage =
+          err instanceof SqlValidationError
+            ? `SQL バリデーションエラー: ${err.message}`
+            : 'SQL の実行中にエラーが発生しました。'
+
+        sendSseEvent(res, 'error', { message: userMessage })
+        _saveAssistantMessage(activeConversationId, fullAssistantText || userMessage, extractedSql, extractedChartType, null, userMessage)
+      }
     }
   } catch (err) {
     // 予期しないエラー（上記の try-catch を抜けてきた場合）

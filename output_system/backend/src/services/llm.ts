@@ -131,8 +131,11 @@ const REQUEST_TIMEOUT_MS = 60_000
 /**
  * システムプロンプトを生成する
  *
- * DB種別に応じたSQL方言指示を含める。
- * スキーマに含まれるコメント情報の活用を明示的に指示する。
+ * DB種別に応じたSQL方言指示（DB接続）またはGraphQLクエリ生成指示を含める。
+ * GraphQL時:
+ *   - Query のみ生成。Mutation/Subscription は絶対に生成しない
+ *   - フラットなデータ構造を返すよう指示（可視化のため）
+ *   - JSON レスポンスフォーマットは SQL 時と同一（"sql" フィールドに GraphQL クエリを格納）
  *
  * @param dbType - DB種別（mysql / postgresql / graphql）
  * @returns システムプロンプト文字列
@@ -141,26 +144,49 @@ function buildSystemPrompt(dbType: 'mysql' | 'postgresql' | 'graphql'): string {
   if (dbType === 'graphql') {
     return `You are a helpful data analyst assistant. Your role is to help users understand and query GraphQL APIs.
 
-DATABASE TYPE: GraphQL
-The connected data source is a GraphQL API. You can help users understand the schema and formulate GraphQL queries.
+DATA SOURCE TYPE: GraphQL API
+The connected data source is a GraphQL API. Your task is to translate natural language questions into GraphQL queries for data visualization.
 
 SCHEMA INFORMATION:
 The user's message always contains a "Database Schema" section that lists ALL available types and fields. This is the complete and authoritative schema of the connected GraphQL API.
 - **NEVER say you don't have schema information. It is ALWAYS provided in the user's message.**
 - **NEVER ask the user to provide type or field information. You already have it.**
 - Use ONLY the types and fields listed in the "Database Schema" section.
+- If the "Database Schema" section shows no types, tell the user that the API has no accessible types and suggest checking the connection settings. Do NOT generate any query in this case.
 
-RULES:
-1. When the user asks about data, generate a GraphQL query to fetch it.
-2. Format GraphQL queries in the "sql" block (they will be labeled appropriately in the UI).
-3. Choose the most appropriate chart type for visualization:
-   - "bar"  : Category comparisons
-   - "line" : Time series data
-   - "pie"  : Proportional data
-   - "table": Complex data or when no specific chart is appropriate
+CRITICAL SECURITY RULES:
+1. **ONLY generate Query operations. NEVER generate Mutation or Subscription operations.**
+2. **Do NOT use "mutation" or "subscription" keywords under any circumstances.**
+3. If the user asks to create, update, or delete data, politely decline and explain that only data retrieval is supported.
 
-IMPORTANT: Always try your best to help the user. If the question is vague, make reasonable assumptions based on the available schema.
-`
+QUERY GENERATION RULES:
+4. Generate GraphQL queries that return FLAT data structures optimized for visualization:
+   - Prefer scalar fields (String, Int, Float, Boolean) over nested objects
+   - If you need nested fields, expand them to get scalar values directly
+   - Avoid deeply nested structures that are hard to tabulate
+   - Example: prefer \`{ user { name } }\` over \`{ user }\` when \`user\` is an object type
+5. Choose the most appropriate chart type for visualization:
+   - "bar"  : Category comparisons (rankings, counts by category)
+   - "line" : Time series data (trends over time)
+   - "pie"  : Proportional data (distribution, share percentages)
+   - "table": Complex data, many fields, or when no specific chart is appropriate
+6. **CRITICAL: NEVER reference types or fields that are not listed in the Database Schema.**
+
+IMPORTANT: Always try your best to help the user. If the question is vague, make reasonable assumptions based on the available schema and explain your interpretation.
+
+RESPONSE FORMAT:
+First, provide a brief explanation of your approach in the user's language.
+Then, include a JSON code block with EXACTLY this structure:
+
+\`\`\`json
+{
+  "sql": "query { ... }",
+  "chart_type": "table"
+}
+\`\`\`
+
+The "sql" field contains the GraphQL query (the field name "sql" is reused for compatibility).
+The JSON must always be at the end of your response.`
   }
 
   const dialectName = dbType === 'mysql' ? 'MySQL' : 'PostgreSQL'
@@ -214,15 +240,39 @@ The JSON must always be at the end of your response.`
  * SchemaInfo をシステムプロンプトに埋め込むテキスト形式に変換する
  *
  * LLM が理解しやすいよう、テーブル名とカラム情報を人間が読みやすい形式で出力する。
+ * GraphQL 接続の場合は、Type/Field として出力する（テーブル/カラムの代わり）。
  *
  * @param schema - fetchSchema() から取得したスキーマ情報
  * @returns プロンプトに埋め込む文字列
  *
- * @example
- * schemaToPromptText({ database: 'mydb', tables: [{ name: 'users', columns: [...] }] })
- * // => "Database: mydb\n\nTable: users\n  - id (integer, NOT NULL)\n  - name (text, NULL)..."
+ * @example DB の場合:
+ * schemaToPromptText({ dbType: 'mysql', database: 'mydb', tables: [...] })
+ * // => "Database: mydb (MySQL)\n\nTable: users\n  - id (integer, NOT NULL)\n..."
+ *
+ * @example GraphQL の場合:
+ * schemaToPromptText({ dbType: 'graphql', database: 'https://...', tables: [...] })
+ * // => "GraphQL API: https://...\n\nType: User\n  - id (ID!, required)\n..."
  */
 export function schemaToPromptText(schema: SchemaInfo): string {
+  if (schema.dbType === 'graphql') {
+    // GraphQL 接続の場合: Type/Field として出力
+    const lines: string[] = [`GraphQL API: ${schema.database}`, '']
+
+    for (const table of schema.tables) {
+      // table.name = GraphQL の Type 名
+      lines.push(`Type: ${table.name}`)
+      for (const col of table.columns) {
+        // col.nullable = false の場合は NON_NULL（required）
+        const nullability = col.nullable ? 'nullable' : 'required'
+        lines.push(`  - ${col.name}: ${col.type} (${nullability})`)
+      }
+      lines.push('')
+    }
+
+    return lines.join('\n').trimEnd()
+  }
+
+  // DB 接続の場合: Table/Column として出力（既存の処理）
   const dbTypeLabel = schema.dbType === 'mysql' ? 'MySQL' : 'PostgreSQL'
   const lines: string[] = [`Database: ${schema.database} (${dbTypeLabel})`, '']
 
@@ -475,10 +525,11 @@ export class LlmService {
   /**
    * クエリ結果をLLMに渡し、分析コメントをストリーミング生成する
    *
-   * SQL実行結果に対してデータの傾向・特徴・注目ポイントを解説する。
+   * SQL/GraphQLクエリ実行結果に対してデータの傾向・特徴・注目ポイントを解説する。
+   * dbType が 'graphql' の場合は「実行したSQL」の表示を「実行したGraphQLクエリ」に変える。
    * 呼び出し側は for-await-of で テキストチャンクを受け取る。
    *
-   * @param input - 元の質問、実行SQL、クエリ結果
+   * @param input - 元の質問、実行クエリ（SQL or GraphQL）、クエリ結果、DB種別
    * @yields string - テキストチャンク（逐次送信用）
    */
   async *analyzeResults(input: {
@@ -486,8 +537,9 @@ export class LlmService {
     sql: string
     columns: string[]
     rows: Record<string, unknown>[]
+    dbType?: 'mysql' | 'postgresql' | 'graphql'
   }): AsyncGenerator<string> {
-    const { question, sql, columns, rows } = input
+    const { question, sql, columns, rows, dbType } = input
 
     // 結果データをテキスト化（最大50行に制限してトークン節約）
     const displayRows = rows.slice(0, 50)
@@ -496,12 +548,15 @@ export class LlmService {
     ).join('\n')
     const truncatedNote = rows.length > 50 ? `\n（全${rows.length}件中、先頭50件を表示）` : ''
 
+    // GraphQL と SQL でクエリの表現を切り替える
+    const queryLabel = dbType === 'graphql' ? '実行したGraphQLクエリ' : '実行したSQL'
+
     const userMessage = `以下のデータについて、簡潔に分析コメントしてください。
 
 ## ユーザーの質問
 ${question}
 
-## 実行したSQL
+## ${queryLabel}
 ${sql}
 
 ## クエリ結果（${rows.length}件）

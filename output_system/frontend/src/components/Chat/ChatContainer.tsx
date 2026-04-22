@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useRef, type FC } from 'react'
-import type { ChatMessage as ChatMessageType } from '../../types'
+import type { ChatMessage as ChatMessageType, DbType } from '../../types'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
 import Loading from '../common/Loading'
@@ -29,6 +29,7 @@ import Loading from '../common/Loading'
  * @property onSend                - メッセージ送信ハンドラ
  * @property isDbConnectionSelected - DB接続先が選択されているかどうか（PBI #149 追加）
  *                                    false の場合はチャット入力を無効化する
+ * @property selectedDbType        - 選択中のDB種別（PBI #201 追加: GraphQL時のラベル切替用）
  */
 interface ChatContainerProps {
   messages: ChatMessageType[]
@@ -36,6 +37,8 @@ interface ChatContainerProps {
   onSend: (message: string) => Promise<void>
   /** DB接続先が選択されているかどうか（false = 未選択でチャット入力を無効化） */
   isDbConnectionSelected?: boolean
+  /** 選択中のDB種別（省略時は 'mysql' として扱う。GraphQL時は 'graphql' を渡す） */
+  selectedDbType?: DbType
 }
 
 /**
@@ -51,6 +54,7 @@ const ChatContainer: FC<ChatContainerProps> = ({
   isLoading,
   onSend,
   isDbConnectionSelected = true,
+  selectedDbType,
 }) => {
   // チャットエリアの最下部へのスクロール用 ref
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -109,8 +113,9 @@ const ChatContainer: FC<ChatContainerProps> = ({
         )}
 
         {/* メッセージリスト */}
+        {/* dbType を渡して GraphQL接続時のラベル切替を有効化（PBI #201） */}
         {messages.map((message) => (
-          <ChatMessage key={message.id} message={message} />
+          <ChatMessage key={message.id} message={message} dbType={selectedDbType} />
         ))}
 
         {/* ローディング表示（ストリーミング開始前の待ち状態） */}

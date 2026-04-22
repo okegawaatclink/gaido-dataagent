@@ -6,9 +6,13 @@
  *
  * アシスタントメッセージには以下を表示する:
  * - ストリーミングテキスト（StreamingText）
- * - 生成SQL（SQLDisplay）
+ * - 生成SQL または GraphQLクエリ（SQLDisplay: dbType に応じてラベルを切替）
  * - クエリ実行結果（ChartRenderer: Epic 3 PBI 3.1で実装。chart_typeに応じてグラフ/テーブルを描画）
+ * - AI分析コメント（StreamingText）
  * - エラーメッセージ（ErrorMessage）
+ *
+ * PBI #201 更新:
+ * - dbType プロパティを追加（graphql の場合 SQLDisplay のラベルを「GraphQLクエリ」に変更）
  *
  * XSS対策:
  * - ユーザー入力・LLM出力はすべてReactの自動エスケープに任せる
@@ -16,7 +20,7 @@
  */
 
 import type { FC } from 'react'
-import type { ChatMessage as ChatMessageType } from '../../types'
+import type { ChatMessage as ChatMessageType, DbType } from '../../types'
 import StreamingText from './StreamingText'
 import SQLDisplay from '../SQL/SQLDisplay'
 import ChartRenderer from '../Chart/ChartRenderer'
@@ -26,21 +30,29 @@ import ErrorMessage from '../common/ErrorMessage'
  * ChatMessage コンポーネントの Props
  *
  * @property message - 表示するチャットメッセージオブジェクト
+ * @property dbType  - 選択中のDB接続先タイプ（省略時はSQLとして扱う）
+ *                     'graphql' の場合、SQLDisplayのラベルを「生成されたGraphQLクエリ」に変更する
  */
 interface ChatMessageProps {
   message: ChatMessageType
+  /** DB種別（'mysql' / 'postgresql' / 'graphql'）。省略時はSQLとして扱う */
+  dbType?: DbType
 }
 
 /**
  * チャットメッセージ表示コンポーネント
  *
  * user ロール: 右寄せの吹き出しで質問テキストを表示する
- * assistant ロール: 左寄せで応答テキスト・SQL・結果・エラーを表示する
+ * assistant ロール: 左寄せで応答テキスト・SQL/GraphQL・結果・エラーを表示する
  *
  * @param props - ChatMessageProps
  */
-const ChatMessage: FC<ChatMessageProps> = ({ message }) => {
+const ChatMessage: FC<ChatMessageProps> = ({ message, dbType }) => {
   const isUser = message.role === 'user'
+
+  // SQLDisplay に渡すラベル
+  // GraphQL接続の場合は「生成されたGraphQLクエリ」、DB接続の場合は「生成されたSQL」
+  const queryLabel = dbType === 'graphql' ? '生成されたGraphQLクエリ' : '生成されたSQL'
 
   return (
     <div
@@ -77,10 +89,11 @@ const ChatMessage: FC<ChatMessageProps> = ({ message }) => {
           </div>
         )}
 
-        {/* 生成SQL表示（アシスタントメッセージのみ） */}
+        {/* 生成SQL/GraphQLクエリ表示（アシスタントメッセージのみ） */}
+        {/* dbType に応じてラベルを切替（PBI #201）: DB接続="生成されたSQL", GraphQL="生成されたGraphQLクエリ" */}
         {!isUser && message.sql && (
           <div className="chat-message__sql">
-            <SQLDisplay sql={message.sql} />
+            <SQLDisplay sql={message.sql} label={queryLabel} />
           </div>
         )}
 
