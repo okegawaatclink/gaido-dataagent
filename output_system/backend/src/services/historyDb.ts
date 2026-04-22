@@ -44,16 +44,28 @@ import fs from 'fs'
  *
  * password_encrypted には AES-256-GCM で暗号化されたパスワードが格納される。
  * 平文パスワードは保存しないこと。
+ *
+ * PBI #200 追加:
+ * - endpoint_url: GraphQL接続先のエンドポイントURL（GraphQL時のみ使用。DB時はNULL）
+ * - host/port/username/password_encrypted/database_name: GraphQL時はNULL許容
  */
 export interface DbConnectionRow {
   id: string
   name: string
+  /** DBタイプ: 'mysql' | 'postgresql' | 'graphql' */
   db_type: string
-  host: string
-  port: number
-  username: string
-  password_encrypted: string
-  database_name: string
+  /** DBホスト名（GraphQL時はNULL） */
+  host: string | null
+  /** DBポート番号（GraphQL時はNULL） */
+  port: number | null
+  /** DBユーザー名（GraphQL時はNULL） */
+  username: string | null
+  /** 暗号化済みパスワード（GraphQL時はNULL） */
+  password_encrypted: string | null
+  /** データベース名（GraphQL時はNULL） */
+  database_name: string | null
+  /** GraphQL接続先エンドポイントURL（DB時はNULL） */
+  endpoint_url: string | null
   is_last_used: number  // SQLite では BOOLEAN は INTEGER（0/1）として保存
   schema_cache: string | null  // SchemaInfo の JSON 文字列（キャッシュ済みスキーマ）
   schema_cached_at: string | null  // スキーマキャッシュの取得日時（ISO 8601）
@@ -232,24 +244,30 @@ function runMigrations(db: Database.Database): void {
   // ===========================================================================
   // - id: UUID（クライアント側で生成）
   // - name: 接続名（表示用）。UNIQUE 制約で重複を防ぐ
-  // - db_type: 'mysql' または 'postgresql'
-  // - host: ホスト名
-  // - port: ポート番号
-  // - username: DBユーザー名
-  // - password_encrypted: AES-256-GCM で暗号化されたパスワード（平文は保存しない）
-  // - database_name: 接続先DBの名前
+  // - db_type: 'mysql' | 'postgresql' | 'graphql'（PBI #200でgraphqlを追加）
+  // - host: ホスト名（GraphQL時はNULL）
+  // - port: ポート番号（GraphQL時はNULL）
+  // - username: DBユーザー名（GraphQL時はNULL）
+  // - password_encrypted: AES-256-GCM で暗号化されたパスワード（GraphQL時はNULL）
+  // - database_name: 接続先DBの名前（GraphQL時はNULL）
+  // - endpoint_url: GraphQL接続先エンドポイントURL（DB時はNULL）（PBI #200追加）
   // - is_last_used: 最後に使用したDB フラグ（0/1）。SQLite では BOOLEAN を INTEGER で表現
   // - created_at / updated_at: ISO 8601 文字列で保存
+  //
+  // GraphQL対応方針（PBI #200）:
+  //   - db_type='graphql' の場合: endpoint_url のみ必須、host/port/username/password/database_name はNULL
+  //   - db_type='mysql'/'postgresql' の場合: 従来通り host/port/username/password/database_name が必須
   db.exec(`
     CREATE TABLE IF NOT EXISTS db_connections (
       id                 TEXT     NOT NULL PRIMARY KEY,
       name               TEXT     NOT NULL UNIQUE,
-      db_type            TEXT     NOT NULL CHECK(db_type IN ('mysql', 'postgresql')),
-      host               TEXT     NOT NULL,
-      port               INTEGER  NOT NULL,
-      username           TEXT     NOT NULL,
-      password_encrypted TEXT     NOT NULL,
-      database_name      TEXT     NOT NULL,
+      db_type            TEXT     NOT NULL CHECK(db_type IN ('mysql', 'postgresql', 'graphql')),
+      host               TEXT,
+      port               INTEGER,
+      username           TEXT,
+      password_encrypted TEXT,
+      database_name      TEXT,
+      endpoint_url       TEXT,
       is_last_used       INTEGER  NOT NULL DEFAULT 0,
       created_at         DATETIME NOT NULL,
       updated_at         DATETIME NOT NULL
@@ -264,6 +282,10 @@ function runMigrations(db: Database.Database): void {
   }
   if (!columnNames.includes('schema_cached_at')) {
     db.exec(`ALTER TABLE db_connections ADD COLUMN schema_cached_at DATETIME DEFAULT NULL`)
+  }
+  // PBI #200: endpoint_url カラムの追加（既存DB互換）
+  if (!columnNames.includes('endpoint_url')) {
+    db.exec(`ALTER TABLE db_connections ADD COLUMN endpoint_url TEXT DEFAULT NULL`)
   }
 
   // ===========================================================================
@@ -621,12 +643,17 @@ export function listMessagesByConversationId(
  * password は必ず暗号化済みのものを渡すこと（平文パスワードは保存しない）。
  * AES-256-GCM 暗号化は呼び出し元（config サービス等）が担当する。
  *
+ * PBI #200: GraphQL接続先に対応。
+ * - db_type='graphql' の場合: endpoint_url が必須。host/port/username/password_encrypted/database_name はNULL可
+ * - db_type='mysql'/'postgresql' の場合: 従来通り（endpoint_url はNULL）
+ *
  * @param db - Database インスタンス
  * @param params - 作成パラメータ
  * @returns 作成された DbConnectionRow
  *
  * @example
  * ```typescript
+ * // DB接続先の作成
  * const conn = createDbConnection(db, {
  *   id: uuidv4(),
  *   name: '本番DB',
@@ -637,6 +664,14 @@ export function listMessagesByConversationId(
  *   password_encrypted: encryptedPassword,
  *   database_name: 'production',
  * })
+ *
+ * // GraphQL接続先の作成
+ * const graphqlConn = createDbConnection(db, {
+ *   id: uuidv4(),
+ *   name: 'My GraphQL API',
+ *   db_type: 'graphql',
+ *   endpoint_url: 'https://api.example.com/graphql',
+ * })
  * ```
  */
 export function createDbConnection(
@@ -645,32 +680,40 @@ export function createDbConnection(
     id: string
     name: string
     db_type: string
-    host: string
-    port: number
-    username: string
-    password_encrypted: string
-    database_name: string
+    /** DBホスト名（GraphQL時はundefined/null可） */
+    host?: string | null
+    /** DBポート番号（GraphQL時はundefined/null可） */
+    port?: number | null
+    /** DBユーザー名（GraphQL時はundefined/null可） */
+    username?: string | null
+    /** 暗号化済みパスワード（GraphQL時はundefined/null可） */
+    password_encrypted?: string | null
+    /** データベース名（GraphQL時はundefined/null可） */
+    database_name?: string | null
+    /** GraphQLエンドポイントURL（DB時はundefined/null可） */
+    endpoint_url?: string | null
   }
 ): DbConnectionRow {
   const now = new Date().toISOString()
   const stmt = db.prepare(`
     INSERT INTO db_connections (
       id, name, db_type, host, port, username, password_encrypted,
-      database_name, is_last_used, created_at, updated_at
+      database_name, endpoint_url, is_last_used, created_at, updated_at
     ) VALUES (
       @id, @name, @db_type, @host, @port, @username, @password_encrypted,
-      @database_name, 0, @created_at, @updated_at
+      @database_name, @endpoint_url, 0, @created_at, @updated_at
     )
   `)
   stmt.run({
     id: params.id,
     name: params.name,
     db_type: params.db_type,
-    host: params.host,
-    port: params.port,
-    username: params.username,
-    password_encrypted: params.password_encrypted,
-    database_name: params.database_name,
+    host: params.host ?? null,
+    port: params.port ?? null,
+    username: params.username ?? null,
+    password_encrypted: params.password_encrypted ?? null,
+    database_name: params.database_name ?? null,
+    endpoint_url: params.endpoint_url ?? null,
     created_at: now,
     updated_at: now,
   })
@@ -690,7 +733,7 @@ export function getDbConnectionById(
 ): DbConnectionRow | undefined {
   const stmt = db.prepare(`
     SELECT id, name, db_type, host, port, username, password_encrypted,
-           database_name, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
+           database_name, endpoint_url, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
     FROM db_connections
     WHERE id = ?
   `)
@@ -706,7 +749,7 @@ export function getDbConnectionById(
 export function listDbConnections(db: Database.Database): DbConnectionRow[] {
   const stmt = db.prepare(`
     SELECT id, name, db_type, host, port, username, password_encrypted,
-           database_name, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
+           database_name, endpoint_url, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
     FROM db_connections
     ORDER BY name ASC
   `)
@@ -771,7 +814,7 @@ export function getLastUsedDbConnection(
 ): DbConnectionRow | undefined {
   const stmt = db.prepare(`
     SELECT id, name, db_type, host, port, username, password_encrypted,
-           database_name, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
+           database_name, endpoint_url, is_last_used, schema_cache, schema_cached_at, created_at, updated_at
     FROM db_connections
     WHERE is_last_used = 1
     ORDER BY updated_at DESC

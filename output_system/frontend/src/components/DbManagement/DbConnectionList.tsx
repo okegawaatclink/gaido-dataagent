@@ -93,7 +93,9 @@ const DbConnectionList: FC<DbConnectionListProps> = ({
   /**
    * DB種別の表示ラベルを返す
    *
-   * @param dbType - DB種別（'mysql' | 'postgresql'）
+   * PBI #200: 'graphql' を追加
+   *
+   * @param dbType - DB種別（'mysql' | 'postgresql' | 'graphql'）
    * @returns 表示用ラベル
    */
   const getDbTypeLabel = (dbType: string): string => {
@@ -102,6 +104,8 @@ const DbConnectionList: FC<DbConnectionListProps> = ({
         return 'MySQL'
       case 'postgresql':
         return 'PostgreSQL'
+      case 'graphql':
+        return 'GraphQL'
       default:
         return dbType
     }
@@ -169,21 +173,41 @@ const DbConnectionList: FC<DbConnectionListProps> = ({
                       </span>
                     )}
                   </div>
-                  {/* 接続詳細（DB種別 / ホスト:ポート / DB名） */}
+                  {/*
+                   * 接続詳細（DB種別 / ホスト:ポート / DB名）
+                   *
+                   * PBI #200: GraphQL接続先は「GraphQL / エンドポイントURL」形式で表示
+                   * DB接続先は従来通り「MySQL/PostgreSQL / ホスト:ポート / DB名」形式で表示
+                   */}
                   <div className="db-connection-item__detail">
                     <span className="db-connection-item__db-type">
                       {getDbTypeLabel(conn.dbType)}
                     </span>
-                    <span className="db-connection-item__separator" aria-hidden="true">
-                      /
-                    </span>
-                    <span className="db-connection-item__host">
-                      {conn.host}:{conn.port}
-                    </span>
-                    <span className="db-connection-item__separator" aria-hidden="true">
-                      /
-                    </span>
-                    <span className="db-connection-item__db-name">{conn.databaseName}</span>
+                    {conn.dbType === 'graphql' ? (
+                      // GraphQL接続先: エンドポイントURLを表示
+                      <>
+                        <span className="db-connection-item__separator" aria-hidden="true">
+                          /
+                        </span>
+                        <span className="db-connection-item__endpoint-url" title={conn.endpointUrl ?? ''}>
+                          {conn.endpointUrl}
+                        </span>
+                      </>
+                    ) : (
+                      // DB接続先（MySQL/PostgreSQL）: ホスト:ポート / DB名を表示
+                      <>
+                        <span className="db-connection-item__separator" aria-hidden="true">
+                          /
+                        </span>
+                        <span className="db-connection-item__host">
+                          {conn.host}:{conn.port}
+                        </span>
+                        <span className="db-connection-item__separator" aria-hidden="true">
+                          /
+                        </span>
+                        <span className="db-connection-item__db-name">{conn.databaseName}</span>
+                      </>
+                    )}
                   </div>
                 </div>
 

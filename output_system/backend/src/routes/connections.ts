@@ -43,9 +43,10 @@ const router = Router()
 
 /**
  * 許可する dbType 一覧
- * api.md の定義に準拠。mysql と postgresql のみサポート。
+ * api.md の定義に準拠。mysql / postgresql / graphql をサポート。
+ * PBI #200: 'graphql' を追加
  */
-const VALID_DB_TYPES = ['mysql', 'postgresql'] as const
+const VALID_DB_TYPES = ['mysql', 'postgresql', 'graphql'] as const
 
 /**
  * リクエストボディのバリデーション結果型
@@ -58,22 +59,29 @@ interface ValidationResult {
 }
 
 /**
- * DB接続先のリクエストボディをバリデーションする
+ * DB/GraphQL接続先のリクエストボディをバリデーションする
  *
- * 必須フィールド: name, dbType, host, port, username, databaseName
- * パスワード: POST（必須）/ PUT（省略可）
+ * DB接続（mysql / postgresql）の必須フィールド: name, dbType, host, port, username, databaseName
+ * GraphQL接続の必須フィールド: name, dbType, endpointUrl
  *
  * バリデーションルール:
+ *   共通:
  *   - name: 必須、文字列
- *   - dbType: 必須、'mysql' または 'postgresql'
+ *   - dbType: 必須、'mysql' | 'postgresql' | 'graphql'
+ *
+ *   DB接続時（mysql/postgresql）:
  *   - host: 必須、文字列
  *   - port: 必須、1〜65535 の整数
  *   - username: 必須、文字列
  *   - databaseName: 必須、文字列
  *   - password: POST 時は必須、PUT 時は省略可（省略時は既存パスワードを維持）
  *
+ *   GraphQL接続時:
+ *   - endpointUrl: 必須、HTTP/HTTPSスキーマのURL形式
+ *   - host/port/username/password/databaseName: 不要（あっても無視）
+ *
  * @param body - リクエストボディ（型不明のため unknown）
- * @param requirePassword - パスワードを必須とするか（POST: true, PUT: false）
+ * @param requirePassword - パスワードを必須とするか（DB接続のPOST時: true, PUT時: false）
  * @returns バリデーション結果（input または error を含む）
  */
 function validateConnectionInput(body: unknown, requirePassword: boolean): ValidationResult {
@@ -83,22 +91,63 @@ function validateConnectionInput(body: unknown, requirePassword: boolean): Valid
 
   const b = body as Record<string, unknown>
 
-  // 必須フィールドのチェック
-  const requiredFields = ['name', 'dbType', 'host', 'port', 'username', 'databaseName']
-  for (const field of requiredFields) {
+  // name は常に必須
+  if (!b.name || b.name === '') {
+    return { error: "Field 'name' is required." }
+  }
+  if (typeof b.name !== 'string') {
+    return { error: "Field 'name' must be a string." }
+  }
+
+  // dbType の必須チェックと値チェック
+  if (!b.dbType || b.dbType === '') {
+    return { error: "Field 'dbType' is required." }
+  }
+  if (!VALID_DB_TYPES.includes(b.dbType as typeof VALID_DB_TYPES[number])) {
+    return { error: `Field 'dbType' must be one of: ${VALID_DB_TYPES.join(', ')}.` }
+  }
+
+  const dbType = b.dbType as typeof VALID_DB_TYPES[number]
+
+  // GraphQL接続時のバリデーション
+  if (dbType === 'graphql') {
+    // endpointUrl が必須
+    if (!b.endpointUrl || b.endpointUrl === '') {
+      return { error: "Field 'endpointUrl' is required for GraphQL connections." }
+    }
+    if (typeof b.endpointUrl !== 'string') {
+      return { error: "Field 'endpointUrl' must be a string." }
+    }
+    // URL形式チェック（HTTPまたはHTTPSスキーマのみ許可）
+    try {
+      const url = new URL(b.endpointUrl)
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return { error: "Field 'endpointUrl' must start with http:// or https://." }
+      }
+    } catch {
+      return { error: "Field 'endpointUrl' must be a valid URL." }
+    }
+
+    return {
+      input: {
+        name: b.name,
+        dbType: 'graphql',
+        endpointUrl: b.endpointUrl,
+      },
+    }
+  }
+
+  // DB接続時（mysql / postgresql）のバリデーション: 従来通り
+  const requiredDbFields = ['host', 'port', 'username', 'databaseName']
+  for (const field of requiredDbFields) {
     if (b[field] === undefined || b[field] === null || b[field] === '') {
       return { error: `Field '${field}' is required.` }
     }
   }
 
-  // パスワードの必須チェック（POST 時のみ）
+  // パスワードの必須チェック（DB接続のPOST 時のみ）
   if (requirePassword && (b.password === undefined || b.password === null || b.password === '')) {
     return { error: "Field 'password' is required." }
-  }
-
-  // dbType の値チェック（mysql / postgresql のみ許可）
-  if (!VALID_DB_TYPES.includes(b.dbType as typeof VALID_DB_TYPES[number])) {
-    return { error: `Field 'dbType' must be one of: ${VALID_DB_TYPES.join(', ')}.` }
   }
 
   // port の型・範囲チェック（1〜65535 の整数）
@@ -108,7 +157,7 @@ function validateConnectionInput(body: unknown, requirePassword: boolean): Valid
   }
 
   // 文字列フィールドの型チェック
-  const stringFields = ['name', 'host', 'username', 'databaseName']
+  const stringFields = ['host', 'username', 'databaseName']
   for (const field of stringFields) {
     if (typeof b[field] !== 'string') {
       return { error: `Field '${field}' must be a string.` }
@@ -117,8 +166,8 @@ function validateConnectionInput(body: unknown, requirePassword: boolean): Valid
 
   return {
     input: {
-      name: b.name as string,
-      dbType: b.dbType as 'mysql' | 'postgresql',
+      name: b.name,
+      dbType: dbType as 'mysql' | 'postgresql' | 'graphql',
       host: b.host as string,
       port,
       username: b.username as string,
@@ -197,8 +246,12 @@ router.post('/', async (req: Request, res: Response) => {
  * POST /api/connections/test
  * 接続テストを実行する
  *
- * 指定された接続情報で実際に DB に接続し、成功/失敗を返す。
+ * 指定された接続情報で実際に DB/GraphQL エンドポイントに接続し、成功/失敗を返す。
  * タイムアウトは 5 秒以内（connectionManager.ts 内で設定）。
+ *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql': Introspection Query で接続テスト（パスワード不要）
+ * - dbType='mysql'/'postgresql': 従来の SELECT 1 で接続テスト
  *
  * 注意: このルートは /api/connections/:id より先に定義する必要がある。
  * Express のルートマッチングは定義順に行われるため、'test' が :id として
@@ -208,8 +261,11 @@ router.post('/', async (req: Request, res: Response) => {
  * @returns 400 Bad Request - 接続失敗またはバリデーションエラー
  */
 router.post('/test', async (req: Request, res: Response) => {
-  // リクエストボディをバリデーション（パスワード必須）
-  const validation = validateConnectionInput(req.body, true)
+  // GraphQL接続テストの場合はパスワード不要（requirePassword=false）
+  // DB接続テストの場合はパスワード必須（requirePassword=true）
+  const body = req.body as Record<string, unknown>
+  const isGraphQL = body.dbType === 'graphql'
+  const validation = validateConnectionInput(req.body, !isGraphQL)
   if (validation.error) {
     return res.status(400).json({ error: validation.error })
   }

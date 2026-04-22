@@ -71,16 +71,20 @@ export async function getConnections(): Promise<DbConnection[]> {
  * POST /api/connections
  * 同じ接続名が既に存在する場合は 409 Conflict が返る。
  *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql' の場合: endpointUrl を送信、port の変換はスキップ
+ * - dbType='mysql'/'postgresql' の場合: 従来通り port を数値に変換
+ *
  * @param input - 登録する接続先情報（パスワード含む）
  * @returns 登録されたDB接続先（パスワードなし）
  * @throws Error - バリデーションエラー（400）・接続名重複（409）・その他エラー
  */
 export async function createConnection(input: DbConnectionInput): Promise<DbConnection> {
-  // port は文字列で来た場合でも数値に変換してAPIへ送信する
-  const body: DbConnectionInput = {
-    ...input,
-    port: Number(input.port),
-  }
+  // GraphQL接続の場合はport変換をスキップ
+  const body: DbConnectionInput =
+    input.dbType === 'graphql'
+      ? { ...input }
+      : { ...input, port: Number(input.port) }
 
   const response = await fetch(buildApiUrl('/api/connections'), {
     method: 'POST',
@@ -102,6 +106,10 @@ export async function createConnection(input: DbConnectionInput): Promise<DbConn
  *
  * PUT /api/connections/:id
  *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql' の場合: endpointUrl を送信、port の変換はスキップ
+ * - dbType='mysql'/'postgresql' の場合: 従来通り port を数値に変換
+ *
  * @param id    - 更新する接続先のID
  * @param input - 更新内容（パスワード含む）
  * @returns 更新されたDB接続先（パスワードなし）
@@ -111,11 +119,11 @@ export async function updateConnection(
   id: string,
   input: DbConnectionInput,
 ): Promise<DbConnection> {
-  // port は文字列で来た場合でも数値に変換してAPIへ送信する
-  const body: DbConnectionInput = {
-    ...input,
-    port: Number(input.port),
-  }
+  // GraphQL接続の場合はport変換をスキップ
+  const body: DbConnectionInput =
+    input.dbType === 'graphql'
+      ? { ...input }
+      : { ...input, port: Number(input.port) }
 
   const response = await fetch(buildApiUrl(`/api/connections/${id}`), {
     method: 'PUT',
@@ -156,11 +164,15 @@ export async function deleteConnection(id: string): Promise<void> {
 }
 
 /**
- * DB接続テストを実行する
+ * DB/GraphQL接続テストを実行する
  *
  * POST /api/connections/test
- * 入力した接続情報でDBへの接続を試行し、成功/失敗を返す。
+ * 入力した接続情報でDB/GraphQLエンドポイントへの接続を試行し、成功/失敗を返す。
  * 200 は接続成功、400 は接続失敗（エラーメッセージ付き）を示す。
+ *
+ * PBI #200: GraphQL対応
+ * - dbType='graphql': endpointUrl のみ送信（port の変換はスキップ）
+ * - dbType='mysql'/'postgresql': 従来通り port を数値に変換
  *
  * @param input - テストする接続情報（パスワード含む）
  * @returns 接続テスト結果（success: boolean, message: string）
@@ -169,11 +181,11 @@ export async function deleteConnection(id: string): Promise<void> {
 export async function testConnection(
   input: DbConnectionInput,
 ): Promise<DbConnectionTestResult> {
-  // port は文字列で来た場合でも数値に変換してAPIへ送信する
-  const body: DbConnectionInput = {
-    ...input,
-    port: Number(input.port),
-  }
+  // GraphQL接続の場合はport変換をスキップ
+  const body: DbConnectionInput =
+    input.dbType === 'graphql'
+      ? { ...input }
+      : { ...input, port: Number(input.port) }
 
   const response = await fetch(buildApiUrl('/api/connections/test'), {
     method: 'POST',

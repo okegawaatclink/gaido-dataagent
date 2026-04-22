@@ -10,14 +10,19 @@
  *   - メモリキャッシュ: Map<dbConnectionId, SchemaInfo> でキャッシュを保持
  *   - キャッシュ無効化: invalidateSchemaCache() を公開し、接続先更新・削除時に呼ぶ
  *
+ * PBI #200 追加:
+ *   - GraphQL接続先のIntrospection Query対応
+ *   - dbType='graphql' の場合: Introspection Query でスキーマを取得し SchemaInfo 形式に変換
+ *   - ビルトイン型（__で始まる型）は除外する
+ *
  * レスポンス形式は api.md の /api/schema と同一:
  * {
  *   database: string,
- *   tables: [
+ *   tables: [  ← GraphQLの場合はTypeを表す
  *     {
  *       name: string,
  *       comment: string | null,
- *       columns: [
+ *       columns: [  ← GraphQLの場合はFieldを表す
  *         { name: string, type: string, nullable: boolean, comment: string | null }
  *       ]
  *     }
@@ -25,7 +30,7 @@
  * }
  *
  * セキュリティ注意事項:
- *   - このサービスは SELECT のみを実行する（リードオンリー）
+ *   - このサービスは SELECT（DB）またはIntrospection（GraphQL）のみを実行する（リードオンリー）
  *   - DBユーザーにはリードオンリー権限（SELECT のみ）を付与することを推奨
  */
 
@@ -48,10 +53,15 @@ export interface TableInfo {
   columns: ColumnInfo[]
 }
 
-/** スキーマ情報レスポンス */
+/**
+ * スキーマ情報レスポンス
+ *
+ * PBI #200: dbType に 'graphql' を追加
+ * GraphQLの場合: database はエンドポイントURL、tables はGraphQLのType/Field情報
+ */
 export interface SchemaInfo {
   database: string
-  dbType: 'mysql' | 'postgresql'
+  dbType: 'mysql' | 'postgresql' | 'graphql'
   tables: TableInfo[]
 }
 
@@ -143,14 +153,21 @@ function buildDynamicKnex(dbConnectionId: string): {
     throw new Error(`Unsupported DB type: ${conn.dbType}`)
   }
 
+  // DB接続には host/port/username/databaseName が必要（GraphQL時はここに来ない想定）
+  // null の場合はエラーを出す（DB型のみが buildDynamicKnex を呼ぶ）
+  const host = conn.host ?? ''
+  const port = conn.port ?? 0
+  const username = conn.username ?? ''
+  const databaseName = conn.databaseName ?? ''
+
   const knexInstance = Knex({
     client,
     connection: {
-      host: conn.host,
-      port: conn.port,
-      user: conn.username,
+      host,
+      port,
+      user: username,
       password: conn.password,
-      database: conn.databaseName,
+      database: databaseName,
       // MySQL: INFORMATION_SCHEMA のコメント情報を文字化けなく取得するために charset を指定
       ...(conn.dbType === 'mysql' ? { charset: 'utf8mb4' } : {}),
     },
@@ -159,7 +176,172 @@ function buildDynamicKnex(dbConnectionId: string): {
     debug: false,
   })
 
-  return { knex: knexInstance, databaseName: conn.databaseName, dbType: conn.dbType }
+  return { knex: knexInstance, databaseName, dbType: conn.dbType }
+}
+
+// =============================================================================
+// GraphQL Introspectionスキーマ取得
+// =============================================================================
+
+/**
+ * GraphQL IntrospectionのTypeエントリ型（内部型）
+ */
+interface GraphQLIntrospectionField {
+  name: string
+  type: {
+    name: string | null
+    kind: string
+    ofType: {
+      name: string | null
+      kind: string
+    } | null
+  }
+}
+
+/**
+ * GraphQL IntrospectionのTypeエントリ型（内部型）
+ */
+interface GraphQLIntrospectionType {
+  name: string
+  kind: string
+  fields: GraphQLIntrospectionField[] | null
+}
+
+/**
+ * GraphQL Introspection Query のレスポンス型（内部型）
+ */
+interface GraphQLIntrospectionResponse {
+  data?: {
+    __schema?: {
+      types: GraphQLIntrospectionType[]
+    }
+  }
+  errors?: Array<{ message: string }>
+}
+
+/**
+ * GraphQL型の実際の型名を解決する
+ *
+ * GraphQLの型は NON_NULL / LIST でラップされることがある。
+ * ofType を再帰的に辿って実際の型名を取得する。
+ *
+ * @param type - GraphQL型オブジェクト
+ * @returns 解決された型名文字列
+ *
+ * @example
+ * ```
+ * resolveTypeName({ name: null, kind: 'NON_NULL', ofType: { name: 'String', kind: 'SCALAR' } })
+ * // => 'String!'
+ * resolveTypeName({ name: null, kind: 'LIST', ofType: { name: 'User', kind: 'OBJECT' } })
+ * // => '[User]'
+ * ```
+ */
+function resolveTypeName(type: { name: string | null; kind: string; ofType: { name: string | null; kind: string } | null }): string {
+  if (type.kind === 'NON_NULL') {
+    const inner = type.ofType ? resolveTypeName(type.ofType as { name: string | null; kind: string; ofType: null }) : 'Unknown'
+    return `${inner}!`
+  }
+  if (type.kind === 'LIST') {
+    const inner = type.ofType ? resolveTypeName(type.ofType as { name: string | null; kind: string; ofType: null }) : 'Unknown'
+    return `[${inner}]`
+  }
+  return type.name ?? 'Unknown'
+}
+
+/**
+ * GraphQL Introspection Query を実行してスキーマ情報を取得する
+ *
+ * フルIntrospection Query（types.fields を含む）を実行し、
+ * OBJECT/INTERFACE/INPUT_OBJECT 型とそのフィールドを SchemaInfo 形式に変換する。
+ * ビルトイン型（__ プレフィックス）と SCALAR/ENUM/UNION は除外する。
+ *
+ * @param endpointUrl - GraphQLエンドポイントURL
+ * @returns SchemaInfo 形式のスキーマ情報
+ * @throws Error - 接続失敗またはIntrospection無効の場合
+ */
+async function fetchSchemaGraphQL(endpointUrl: string): Promise<SchemaInfo> {
+  // フルIntrospection Query（フィールド・引数・型情報を含む）
+  const introspectionQuery = `
+    {
+      __schema {
+        types {
+          name
+          kind
+          fields {
+            name
+            type {
+              name
+              kind
+              ofType {
+                name
+                kind
+              }
+            }
+          }
+        }
+      }
+    }
+  `
+
+  const response = await fetch(endpointUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({ query: introspectionQuery }),
+    // タイムアウト: 10秒（フルIntrospectionはデータ量が多いため接続テストより長め）
+    signal: AbortSignal.timeout(10000),
+  })
+
+  if (!response.ok) {
+    throw new Error(`GraphQL接続に失敗しました: HTTP ${response.status} ${response.statusText}`)
+  }
+
+  const data = await response.json() as GraphQLIntrospectionResponse
+
+  if (data.errors && data.errors.length > 0) {
+    const errorMessages = data.errors.map((e) => e.message).join('; ')
+    throw new Error(`GraphQL Introspection エラー: ${errorMessages}`)
+  }
+
+  const types = data.data?.__schema?.types ?? []
+
+  // OBJECT/INTERFACE/INPUT_OBJECT 型のみを対象（SCALAR, ENUM, UNION, ビルトイン型は除外）
+  // ビルトイン型の除外基準: 名前が '__' で始まるもの
+  const filteredTypes = types.filter(
+    (type) =>
+      (type.kind === 'OBJECT' || type.kind === 'INTERFACE' || type.kind === 'INPUT_OBJECT') &&
+      !type.name.startsWith('__')
+  )
+
+  // SchemaInfo.tables 形式に変換（GraphQLのTypeをtableとして扱う）
+  const tables: TableInfo[] = filteredTypes
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((type) => {
+      const columns: ColumnInfo[] = (type.fields ?? []).map((field) => ({
+        name: field.name,
+        // 型名を解決（NON_NULL / LIST のラップを解除）
+        type: resolveTypeName(field.type),
+        // NON_NULL でラップされていればnon-nullable（必須）
+        nullable: field.type.kind !== 'NON_NULL',
+        comment: null,
+      }))
+
+      return {
+        name: type.name,
+        // GraphQLではコメント（description）を取得していないためnull
+        comment: null,
+        columns,
+      }
+    })
+
+  return {
+    // GraphQLの場合: databaseにエンドポイントURLを設定
+    database: endpointUrl,
+    dbType: 'graphql',
+    tables,
+  }
 }
 
 // =============================================================================
@@ -261,7 +443,7 @@ async function fetchSchemaMysql(
 export function buildSchemaInfo(
   database: string,
   rows: InformationSchemaColumn[],
-  dbType: 'mysql' | 'postgresql' = 'mysql'
+  dbType: 'mysql' | 'postgresql' | 'graphql' = 'mysql'
 ): SchemaInfo {
   // テーブル名をキーとしたMapを使い、カラムとテーブルコメントをグループ化
   const tableMap = new Map<string, { comment: string | null; columns: ColumnInfo[] }>()
@@ -342,18 +524,51 @@ export async function fetchSchema(dbConnectionId: string): Promise<SchemaInfo> {
 }
 
 /**
- * 指定DB接続先のスキーマをDBから再取得し、永続キャッシュとメモリキャッシュの両方を更新する
+ * 指定DB/GraphQL接続先のスキーマをDBから再取得し、永続キャッシュとメモリキャッシュの両方を更新する
  *
  * 接続登録時やユーザーの手動リフレッシュ時に呼び出す。
  *
- * @param dbConnectionId - DB接続先ID（UUID）
+ * PBI #200: GraphQL対応
+ * - dbType='graphql' の場合: Introspection Query でスキーマを取得
+ * - dbType='mysql'/'postgresql' の場合: 従来通り INFORMATION_SCHEMA から取得
+ *
+ * @param dbConnectionId - DB/GraphQL接続先ID（UUID）
  * @returns 再取得したスキーマ情報
  * @throws ConnectionNotFoundError 接続先が見つからない場合
- * @throws Error DB接続失敗またはクエリエラー
+ * @throws Error DB/GraphQL接続失敗またはクエリエラー
  */
 export async function refreshSchema(dbConnectionId: string): Promise<SchemaInfo> {
   console.info(`[schema] Fetching schema from DB for dbConnectionId: ${dbConnectionId}`)
 
+  // GraphQL接続先かどうかを確認（接続先情報を取得）
+  const conn = getById(dbConnectionId)
+
+  if (conn.dbType === 'graphql') {
+    // GraphQL接続先: Introspection Query でスキーマを取得
+    if (!conn.endpointUrl) {
+      throw new Error(`GraphQL接続先のendpointUrlが設定されていません: ${dbConnectionId}`)
+    }
+
+    const schemaInfo = await fetchSchemaGraphQL(conn.endpointUrl)
+
+    // メモリキャッシュに保存
+    schemaCache.set(dbConnectionId, schemaInfo)
+
+    // SQLite 永続キャッシュに保存
+    try {
+      const db = getHistoryDb()
+      updateDbConnectionSchemaCache(db, dbConnectionId, JSON.stringify(schemaInfo))
+      console.info(
+        `[schema] GraphQL schema persisted for dbConnectionId: ${dbConnectionId} (${schemaInfo.tables.length} types)`
+      )
+    } catch (err) {
+      console.warn('[schema] Failed to persist GraphQL schema cache (non-fatal):', err)
+    }
+
+    return schemaInfo
+  }
+
+  // DB接続先（MySQL/PostgreSQL）: 従来通りINFORMATION_SCHEMAから取得
   let knexInstance: KnexType | null = null
   try {
     const { knex, databaseName, dbType } = buildDynamicKnex(dbConnectionId)

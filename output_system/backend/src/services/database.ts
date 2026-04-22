@@ -74,11 +74,11 @@ function getOrCreateConnection(dbConnectionId: string): KnexType {
   const knexInstance = Knex({
     client,
     connection: {
-      host: conn.host,
-      port: conn.port,
-      user: conn.username,
+      host: conn.host ?? undefined,
+      port: conn.port ?? undefined,
+      user: conn.username ?? undefined,
       password: conn.password,
-      database: conn.databaseName,
+      database: conn.databaseName ?? undefined,
     },
     pool: {
       // 最小コネクション数: 0（アイドル時にコネクションを解放）

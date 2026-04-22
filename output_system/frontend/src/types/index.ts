@@ -123,27 +123,34 @@ export interface SseConversationData {
 }
 
 // ---------------------------------------------------------------------------
-// DB接続先関連型（PBI #148 追加）
+// DB接続先関連型（PBI #148 追加、PBI #200 GraphQL対応）
 // ---------------------------------------------------------------------------
 
 /**
  * DB種別
  * バックエンドの DbConnection.dbType に対応する。
+ * PBI #200: 'graphql' を追加
  */
-export type DbType = 'mysql' | 'postgresql'
+export type DbType = 'mysql' | 'postgresql' | 'graphql'
 
 /**
  * DB接続先（読み取り用）
  * GET /api/connections レスポンスの各要素に対応する。
  * パスワードは返却されない（セキュリティ要件）。
  *
+ * PBI #200: GraphQL対応
+ * - dbType に 'graphql' を追加
+ * - endpointUrl を追加（GraphQL時のみ）
+ * - host/port/username/databaseName はGraphQL時はnull
+ *
  * @property id           - 接続先の一意識別子（UUID）
  * @property name         - 接続名（例: "本番DB"）
- * @property dbType       - DB種別（mysql / postgresql）
- * @property host         - ホスト名またはIPアドレス
- * @property port         - ポート番号
- * @property username     - DBユーザー名
- * @property databaseName - データベース名
+ * @property dbType       - DB種別（mysql / postgresql / graphql）
+ * @property host         - ホスト名またはIPアドレス（GraphQL時はnull）
+ * @property port         - ポート番号（GraphQL時はnull）
+ * @property username     - DBユーザー名（GraphQL時はnull）
+ * @property databaseName - データベース名（GraphQL時はnull）
+ * @property endpointUrl  - GraphQLエンドポイントURL（DB時はnull）
  * @property isLastUsed   - 最後に使用した接続先かどうか
  * @property createdAt    - 作成日時（ISO 8601文字列）
  * @property updatedAt    - 更新日時（ISO 8601文字列）
@@ -152,10 +159,11 @@ export interface DbConnection {
   id: string
   name: string
   dbType: DbType
-  host: string
-  port: number
-  username: string
-  databaseName: string
+  host: string | null
+  port: number | null
+  username: string | null
+  databaseName: string | null
+  endpointUrl: string | null
   isLastUsed: boolean
   createdAt: string
   updatedAt: string
@@ -166,22 +174,29 @@ export interface DbConnection {
  * POST /api/connections / PUT /api/connections/:id のリクエストボディに対応する。
  * パスワードを含む（登録・更新時のみ送信）。
  *
+ * PBI #200: GraphQL対応
+ * - dbType に 'graphql' を追加
+ * - endpointUrl を追加（GraphQL時は必須、DB時は不要）
+ * - host/port/username/password/databaseName はGraphQL時は不要
+ *
  * @property name         - 接続名
- * @property dbType       - DB種別（mysql / postgresql）
- * @property host         - ホスト名またはIPアドレス
- * @property port         - ポート番号（文字列として入力されることもあるためunion型）
- * @property username     - DBユーザー名
- * @property password     - DBパスワード（平文。バックエンドで暗号化して保存）
- * @property databaseName - データベース名
+ * @property dbType       - DB種別（mysql / postgresql / graphql）
+ * @property host         - ホスト名またはIPアドレス（DB時必須、GraphQL時不要）
+ * @property port         - ポート番号（文字列として入力されることもあるためunion型）（DB時必須、GraphQL時不要）
+ * @property username     - DBユーザー名（DB時必須、GraphQL時不要）
+ * @property password     - DBパスワード（平文。バックエンドで暗号化して保存）（DB時必須、GraphQL時不要）
+ * @property databaseName - データベース名（DB時必須、GraphQL時不要）
+ * @property endpointUrl  - GraphQLエンドポイントURL（GraphQL時必須、DB時不要）
  */
 export interface DbConnectionInput {
   name: string
   dbType: DbType
-  host: string
-  port: number | string
-  username: string
-  password: string
-  databaseName: string
+  host?: string
+  port?: number | string
+  username?: string
+  password?: string
+  databaseName?: string
+  endpointUrl?: string
 }
 
 /**
