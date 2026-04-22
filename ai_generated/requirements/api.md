@@ -14,6 +14,8 @@
 | PUT | /api/connections/:id | DB接続先を更新 | **新規** |
 | DELETE | /api/connections/:id | DB接続先を削除（関連会話も削除） | **新規** |
 | POST | /api/connections/test | DB接続テスト | **新規** |
+| GET | /api/health | ヘルスチェック | 変更なし |
+| GET | /api/config | アプリケーション設定情報（LLMバックエンド・モデル名） | **新規** |
 
 ## OpenAPI定義
 
@@ -133,6 +135,28 @@ paths:
                     type: boolean
                   message:
                     type: string
+
+  /api/config:
+    get:
+      summary: アプリケーション設定情報取得
+      description: 使用中のLLMバックエンド種別とモデル名を返す
+      responses:
+        "200":
+          description: 設定情報
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  llmBackend:
+                    type: string
+                    description: LLMバックエンド種別
+                    enum: ["Anthropic API", "Amazon Bedrock"]
+                    example: "Anthropic API"
+                  llmModel:
+                    type: string
+                    description: 使用中のモデル名
+                    example: "claude-sonnet-4-20250514"
 
   /api/chat:
     post:

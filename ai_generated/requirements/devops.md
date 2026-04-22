@@ -2,22 +2,44 @@
 
 ## デプロイ構成
 
-Docker Composeで web（フロントエンド+バックエンド） + MySQL + phpMyAdmin を一括起動する構成。今回の改修で構成変更なし。
+### ローカル環境
+
+Docker Composeで web（フロントエンド+バックエンド） + MySQL + phpMyAdmin を一括起動する構成。
+
+### AWS環境
+
+AWS ECS Fargate + ALB + EFS でホスト。CloudFormationテンプレートとデプロイスクリプトで一括デプロイ。
+
+- **ECS Fargate**: web + MySQL + phpMyAdmin を1タスク内の3コンテナとして実行
+- **ALB**: フロントエンド（/）とバックエンドAPI（/api/*）をパスベースルーティング
+- **EFS**: SQLite履歴データとMySQLデータの永続化
+- **ECR**: Dockerイメージのプライベートレジストリ
+- **CloudWatch**: コンテナログの集約
 
 ## 環境変数
 
-`.env` ファイルで以下を設定:
+### ローカル環境（.envファイル）
 
 | 変数名 | 説明 | 例 | 変更 |
 |--------|------|-----|------|
 | ANTHROPIC_API_KEY | Claude APIキー | sk-ant-... | 変更なし |
 | ANTHROPIC_MODEL | 使用するClaude モデル名（省略時: claude-sonnet-4-20250514） | claude-sonnet-4-20250514 | 変更なし |
+| USE_BEDROCK | Amazon Bedrock使用フラグ（trueでBedrock経由） | true | **新規追加** |
 | DB_ENCRYPTION_KEY | DB接続先パスワード暗号化キー（32バイト hex文字列） | a1b2c3...（64文字） | **新規追加** |
 | MYSQL_ROOT_PASSWORD | MySQLのrootパスワード | rootpassword | 変更なし |
 | MYSQL_PORT | MySQLの外部公開ポート | 3306 | 変更なし |
 | PHPMYADMIN_PORT | phpMyAdminのポート | 8080 | 変更なし |
 | BACKEND_PORT | バックエンドポート | 3002 | 変更なし |
 | FRONTEND_PORT | フロントエンドポート | 3001 | 変更なし |
+
+### LLMバックエンド設定
+
+| 設定 | Anthropic API直接 | Amazon Bedrock |
+|------|-------------------|----------------|
+| USE_BEDROCK | 未設定 or false | true |
+| ANTHROPIC_API_KEY | 必須 | 不要（IAM認証） |
+| デフォルトモデル | claude-sonnet-4-20250514 | apac.anthropic.claude-sonnet-4-20250514-v1:0 |
+| AWS_REGION | 不要 | ap-northeast-1（デフォルト） |
 
 ### 廃止された環境変数
 
@@ -124,10 +146,65 @@ networks:
 
 ※ 実際のコンテナ名・ネットワーク名は `rules/instance-config.md` を参照
 
+## AWS ECS Fargateデプロイ
+
+### デプロイコマンド
+
+```bash
+cd output_system/aws
+
+# Anthropic API直接利用
+./deploy.sh --api-key sk-ant-xxx --vpc-id vpc-xxx --subnet-ids "subnet-aaa,subnet-bbb"
+
+# Amazon Bedrock利用（AWS内完結）
+./deploy.sh --use-bedrock --vpc-id vpc-xxx --subnet-ids "subnet-aaa,subnet-bbb"
+```
+
+### デプロイスクリプトの動作
+
+1. ECRリポジトリ作成（未存在時）
+2. Dockerイメージビルド（`--no-cache`、gitハッシュ+タイムスタンプのユニークタグ）
+3. ECRへプッシュ（ユニークタグ + latestの両方）
+4. CloudFormationスタックデプロイ（タスク定義の更新を検出）
+5. ECSサービスの強制再デプロイ（`--force-new-deployment`）
+
+### CloudFormation構成
+
+| リソース | 説明 |
+|---------|------|
+| ECS Cluster | containerInsights有効 |
+| ALB | internet-facing、HTTP/HTTPS対応 |
+| ECS Task Definition | web + mysql + phpmyadmin の3コンテナ |
+| EFS | 履歴データ（SQLite）+ MySQLデータの永続化 |
+| IAM Role | Bedrock InvokeModel権限（foundation-model + inference-profile ARN対応） |
+| Security Groups | ALB→タスク（3001, 3002, 8080）、タスク→EFS（2049） |
+
+### AWS環境の主要オプション
+
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| --region | AWSリージョン | ap-northeast-1 |
+| --vpc-id | VPC ID | （必須） |
+| --subnet-ids | サブネットID（2つ以上、異なるAZ） | （必須） |
+| --api-key | Anthropic APIキー | （--use-bedrock未指定時は必須） |
+| --use-bedrock | Amazon Bedrock使用 | false |
+| --cert-arn | ACM証明書ARN（HTTPS用） | （省略可） |
+| --cpu | タスクCPU（512/1024/2048/4096） | 1024 |
+| --memory | タスクメモリMB | 2048 |
+
 ## アクセスURL
+
+### ローカル
 
 | サービス | URL |
 |---------|-----|
 | フロントエンド | http://localhost:3001 |
 | バックエンドAPI | http://localhost:3002 |
 | phpMyAdmin | http://localhost:8080 |
+
+### AWS
+
+| サービス | URL |
+|---------|-----|
+| フロントエンド | http://{ALB DNS名} |
+| バックエンドAPI | http://{ALB DNS名}/api/* |

@@ -2,9 +2,9 @@
 
 ## アーキテクチャ概要
 
-DataAgentは、フロントエンド（React）、バックエンド（Node.js/Express）、外部LLM（Claude API）、データベース（ユーザーDB: MySQL/PostgreSQL + 内部DB: SQLite）の4層構成。Docker Compose でフロントエンド・バックエンド・MySQL・phpMyAdminを一括起動する。
+DataAgentは、フロントエンド（React）、バックエンド（Node.js/Express）、外部LLM（Claude API / Amazon Bedrock）、データベース（ユーザーDB: MySQL/PostgreSQL + 内部DB: SQLite）の4層構成。Docker Compose でフロントエンド・バックエンド・MySQL・phpMyAdminを一括起動する。AWS ECS Fargate へのデプロイにも対応。
 
-今回の改修で、ユーザーDBへの接続を.env固定から画面登録による動的切替に変更。接続先情報はSQLiteに暗号化保存。
+今回の改修で、ユーザーDBへの接続を.env固定から画面登録による動的切替に変更。接続先情報はSQLiteに暗号化保存。LLMバックエンドはAnthropic API直接呼び出しとAmazon Bedrock経由を環境変数で切替可能。
 
 ```mermaid
 flowchart TB
@@ -40,13 +40,16 @@ flowchart TB
     end
 
     subgraph "External Services"
-        Claude["Claude API<br>Anthropic"]
+        Claude["Claude API<br>Anthropic<br>直接呼び出し"]
+        Bedrock["Amazon Bedrock<br>Claude<br>IAM認証"]
     end
 
     Browser -->|"HTTP"| React
     React -->|"REST API + SSE"| Express
-    Express -->|"SQL生成 Streaming"| Claude
+    Express -->|"SQL生成 Streaming<br>USE_BEDROCK=false"| Claude
+    Express -->|"SQL生成 Streaming<br>USE_BEDROCK=true"| Bedrock
     Express -->|"分析コメント Streaming"| Claude
+    Express -->|"分析コメント Streaming"| Bedrock
     Express --> ConnectionManager
     Express --> SchemaLoader
     Express --> SQLValidator
@@ -88,7 +91,7 @@ flowchart LR
 | UIコンポーネント | Recharts, グローバルCSS | グラフ描画 + テーブル表示 |
 | バックエンド | Node.js 20+, Express, TypeScript | REST API + SSE |
 | DB接続 | knex.js | PostgreSQL/MySQL 抽象化。動的接続先切替対応 |
-| LLM連携 | @anthropic-ai/sdk | Claude API公式SDK。SQL生成+分析コメントの2回呼び出し |
+| LLM連携 | @anthropic-ai/sdk, @anthropic-ai/bedrock-sdk | Claude API公式SDK + Bedrock SDK。SQL生成+分析コメントの2回呼び出し。USE_BEDROCK環境変数で切替 |
 | クエリ履歴 | SQLite (better-sqlite3, WAL mode) | 会話・メッセージ・DB接続先の永続化 |
 | パスワード暗号化 | Node.js crypto (AES-256-GCM) | 追加依存なし。暗号化キーは環境変数で管理 |
 | ユーザーDB | MySQL / PostgreSQL（画面から動的登録） | 画面からCRUD可能。接続テスト機能付き |
