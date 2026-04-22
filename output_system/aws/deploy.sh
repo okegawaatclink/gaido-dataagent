@@ -21,7 +21,7 @@ set -euo pipefail
 REGION="${AWS_DEFAULT_REGION:-ap-northeast-1}"
 STACK_NAME="dataagent"
 ECR_REPO_NAME="dataagent"
-IMAGE_TAG="latest"
+IMAGE_TAG=""
 TASK_CPU="1024"
 TASK_MEMORY="2048"
 CERTIFICATE_ARN=""
@@ -123,23 +123,33 @@ echo "[2/4] Building and pushing Docker image..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# Generate unique image tag from git hash + timestamp (ensures CloudFormation detects change)
+if [[ -z "$IMAGE_TAG" ]]; then
+  GIT_SHORT_HASH=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'unknown')
+  IMAGE_TAG="${GIT_SHORT_HASH}-$(date +%Y%m%d%H%M%S)"
+fi
+
 # Login to ECR
 aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
 # Build image (context = project root, same as docker-compose)
 # --platform linux/amd64: Fargate runs on Linux/amd64, required when building on Apple Silicon Mac
+# --no-cache: ensure fresh build with latest source
 # APP_VERSION: gitハッシュ+日付をフロントエンドに埋め込む
 APP_VERSION="$(date +%Y-%m-%d) ($(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'unknown'))"
 docker build \
+  --no-cache \
   --platform linux/amd64 \
   --build-arg APP_VERSION="$APP_VERSION" \
   -f "$PROJECT_ROOT/output_system/Dockerfile" \
   -t "${ECR_URI}:${IMAGE_TAG}" \
   "$PROJECT_ROOT"
 
-# Push
+# Push with unique tag + update latest
 docker push "${ECR_URI}:${IMAGE_TAG}"
+docker tag "${ECR_URI}:${IMAGE_TAG}" "${ECR_URI}:latest"
+docker push "${ECR_URI}:latest"
 
 echo "Image pushed: ${ECR_URI}:${IMAGE_TAG}"
 
@@ -165,6 +175,16 @@ aws cloudformation deploy \
     TaskCpu="$TASK_CPU" \
     TaskMemory="$TASK_MEMORY" \
     CertificateArn="$CERTIFICATE_ARN"
+
+# Force ECS to pull the new image (even if CloudFormation detects no infra change)
+echo ""
+echo "[3.5/4] Forcing new ECS deployment..."
+aws ecs update-service \
+  --cluster dataagent-cluster \
+  --service dataagent-service \
+  --force-new-deployment \
+  --region "$REGION" \
+  --no-cli-pager
 
 # ---------------------------------------------------------------------------
 # Step 4: Show outputs
