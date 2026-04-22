@@ -36,7 +36,7 @@ while [[ $# -gt 0 ]]; do
     --region)        REGION="$2";              shift 2;;
     --vpc-id)        VPC_ID="$2";              shift 2;;
     --subnet-ids)    SUBNET_IDS="$2";          shift 2;;
-    --api-key)       ANTHROPIC_API_KEY="$2";   shift 2;;
+    --api-key)       ANTHROPIC_API_KEY="$2";   shift 2;;  # Optional: only for direct API mode
     --stack-name)    STACK_NAME="$2";          shift 2;;
     --cpu)           TASK_CPU="$2";            shift 2;;
     --memory)        TASK_MEMORY="$2";         shift 2;;
@@ -50,10 +50,10 @@ while [[ $# -gt 0 ]]; do
       echo "Required:"
       echo "  --vpc-id          Existing VPC ID"
       echo "  --subnet-ids      Comma-separated subnet IDs (at least 2, different AZs)"
-      echo "  --api-key         Anthropic API key"
       echo ""
       echo "Optional:"
       echo "  --region          AWS region (default: ap-northeast-1)"
+      echo "  --api-key         Anthropic API key (only for direct API mode, not needed for Bedrock)"
       echo "  --stack-name      CloudFormation stack name (default: dataagent)"
       echo "  --cpu             Task CPU units: 512|1024|2048|4096 (default: 1024)"
       echo "  --memory          Task memory MB: 1024-8192 (default: 2048)"
@@ -67,7 +67,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required params
-for var in VPC_ID SUBNET_IDS ANTHROPIC_API_KEY; do
+for var in VPC_ID SUBNET_IDS; do
   if [[ -z "${!var:-}" ]]; then
     echo "ERROR: --$(echo $var | tr '[:upper:]' '[:lower:]' | tr '_' '-') is required"
     exit 1
@@ -87,7 +87,7 @@ echo "VPC:        $VPC_ID"
 echo "Subnets:    $SUBNET_IDS"
 echo "ECR:        $ECR_URI"
 echo "CPU/Memory: ${TASK_CPU}/${TASK_MEMORY}"
-echo "LLM:        Anthropic API (direct)"
+echo "LLM:        Amazon Bedrock (Claude)"
 echo "============================================"
 
 # ---------------------------------------------------------------------------
@@ -143,7 +143,6 @@ aws cloudformation deploy \
   --parameter-overrides \
     VpcId="$VPC_ID" \
     SubnetIds="$SUBNET_IDS" \
-    AnthropicApiKey="$ANTHROPIC_API_KEY" \
     DbEncryptionKey="$DB_ENCRYPTION_KEY" \
     MysqlRootPassword="$MYSQL_ROOT_PASSWORD" \
     WebImageUri="${ECR_URI}:${IMAGE_TAG}" \
@@ -169,7 +168,7 @@ echo "DataAgent is deploying to ECS Fargate!"
 echo ""
 echo "Access URL: $ALB_DNS"
 echo ""
-echo "Note: LLM is powered by Anthropic Claude API (direct)."
+echo "Note: LLM is powered by Amazon Bedrock (Claude)."
 echo ""
 echo "Check service status:"
 echo "  aws ecs describe-services --cluster dataagent-cluster --services dataagent-service --region $REGION"

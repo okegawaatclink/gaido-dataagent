@@ -252,6 +252,15 @@ Resources:
                   - ssmmessages:OpenControlChannel
                   - ssmmessages:OpenDataChannel
                 Resource: '*'
+        - PolicyName: bedrock-invoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: 'arn:aws:bedrock:*::foundation-model/anthropic.*'
 
   # ===========================================================================
   # ALB (Application Load Balancer)
@@ -420,8 +429,10 @@ Resources:
             - ContainerName: mysql
               Condition: HEALTHY
           Environment:
-            - Name: ANTHROPIC_API_KEY
-              Value: !Ref AnthropicApiKey
+            - Name: USE_BEDROCK
+              Value: 'true'
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
             - Name: DB_ENCRYPTION_KEY
               Value: !Ref DbEncryptionKey
             - Name: DB_TYPE

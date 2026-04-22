@@ -483,7 +483,7 @@ ${sql}
 カラム: ${columns.join(', ')}
 ${resultText}${truncatedNote}`
 
-    const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL
+    const model = process.env.ANTHROPIC_MODEL || (USE_BEDROCK ? DEFAULT_BEDROCK_MODEL : DEFAULT_MODEL)
 
     const analysisSystemPrompt = `あなたはデータアナリストです。クエリ結果を見て、以下の観点から簡潔にコメントしてください:
 - データの傾向や特徴
