@@ -9,13 +9,14 @@ erDiagram
     db_connections {
         string id PK "UUID"
         string name "接続名（表示用）"
-        string db_type "mysql / postgresql"
-        string host "ホスト名"
-        integer port "ポート番号"
-        string username "ユーザー名"
-        string password_encrypted "暗号化済みパスワード（AES-256-GCM）"
-        string database_name "データベース名"
-        integer is_last_used "最後に使用したDB（0/1）"
+        string db_type "mysql / postgresql / graphql"
+        string host "ホスト名（GraphQL時はNULL）"
+        integer port "ポート番号（GraphQL時はNULL）"
+        string username "ユーザー名（GraphQL時はNULL）"
+        string password_encrypted "暗号化済みパスワード（GraphQL時はNULL）"
+        string database_name "データベース名（GraphQL時はNULL）"
+        string endpoint_url "GraphQLエンドポイントURL（DB時はNULL）"
+        integer is_last_used "最後に使用した接続先（0/1）"
         datetime created_at "作成日時"
         datetime updated_at "更新日時"
     }
@@ -47,19 +48,20 @@ erDiagram
 
 ## テーブル定義
 
-### db_connections テーブル（新規追加）
+### db_connections テーブル
 
 | カラム | 型 | 制約 | 説明 |
 |--------|-----|------|------|
 | id | TEXT | PK | UUID |
 | name | TEXT | NOT NULL, UNIQUE | 接続名（表示用） |
-| db_type | TEXT | NOT NULL | mysql / postgresql |
-| host | TEXT | NOT NULL | ホスト名 |
-| port | INTEGER | NOT NULL | ポート番号 |
-| username | TEXT | NOT NULL | ユーザー名 |
-| password_encrypted | TEXT | NOT NULL | AES-256-GCM暗号化済みパスワード |
-| database_name | TEXT | NOT NULL | データベース名 |
-| is_last_used | INTEGER | NOT NULL DEFAULT 0 | 最後に使用したDB（0/1） |
+| db_type | TEXT | NOT NULL | mysql / postgresql / graphql |
+| host | TEXT | NULL | ホスト名（GraphQL時はNULL） |
+| port | INTEGER | NULL | ポート番号（GraphQL時はNULL） |
+| username | TEXT | NULL | ユーザー名（GraphQL時はNULL） |
+| password_encrypted | TEXT | NULL | AES-256-GCM暗号化済みパスワード（GraphQL時はNULL） |
+| database_name | TEXT | NULL | データベース名（GraphQL時はNULL） |
+| endpoint_url | TEXT | NULL | GraphQLエンドポイントURL（DB時はNULL）**v1.1追加** |
+| is_last_used | INTEGER | NOT NULL DEFAULT 0 | 最後に使用した接続先（0/1） |
 | created_at | DATETIME | NOT NULL | 作成日時 |
 | updated_at | DATETIME | NOT NULL | 更新日時 |
 
@@ -90,7 +92,13 @@ erDiagram
 
 ## マイグレーション方針
 
+### v1.0
 - 既存のSQLiteデータベースは**再作成**する（既存の会話履歴は破棄許可済み）
 - db_connectionsテーブルを新規作成
 - conversationsテーブルにdb_connection_idカラムを追加
 - 外部キー制約: `conversations.db_connection_id` → `db_connections.id` (ON DELETE CASCADE)
+
+### v1.1（GraphQL対応）
+- db_connectionsテーブルに `endpoint_url` カラムを追加（TEXT, NULL許容）
+- 既存のhost/port/username/password_encrypted/database_nameカラムをNULL許容に変更（GraphQL接続時は不要のため）
+- db_typeの許容値に 'graphql' を追加

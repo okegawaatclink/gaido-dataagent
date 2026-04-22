@@ -91,12 +91,9 @@ flowchart TB
         subgraph "AddForm 登録・編集フォーム"
             direction TB
             FormName["接続名"]
-            FormType["DB種別 MySQL / PostgreSQL"]
-            FormHost["ホスト名"]
-            FormPort["ポート番号"]
-            FormUser["ユーザー名"]
-            FormPass["パスワード"]
-            FormDB["データベース名"]
+            FormType["DB種別 MySQL / PostgreSQL / GraphQL"]
+            FormDBFields["DB選択時:<br>ホスト名 / ポート番号<br>ユーザー名 / パスワード<br>データベース名"]
+            FormGQLFields["GraphQL選択時:<br>エンドポイントURL"]
             TestBtn["接続テストボタン"]
             SaveBtn["保存ボタン"]
         end
@@ -120,9 +117,9 @@ flowchart TB
 
 | 要素 | 説明 | 備考 |
 |------|------|------|
-| DB選択ドロップダウン | ヘッダーに配置。接続先名一覧 + 「管理」ボタン | 現在の接続先名が常に表示される |
-| DB管理モーダル | 接続先のCRUD操作 | ドロップダウンの「管理」ボタンからアクセス |
-| 接続テストボタン | 入力した接続情報でDB接続を試行 | 成功/失敗をトースト通知で表示 |
+| 接続先選択ドロップダウン | ヘッダーに配置。接続先名一覧 + 「管理」ボタン | `接続名 (mysql)` / `接続名 (graphql)` 形式で表示 |
+| 接続先管理モーダル | 接続先のCRUD操作 | ドロップダウンの「管理」ボタンからアクセス |
+| 接続テストボタン | DB: 接続試行、GraphQL: Introspection Query | 成功/失敗をトースト通知で表示 |
 | サイドバー | 選択中DBの会話履歴一覧。クリックで会話を切り替え | 幅250px程度。折りたたみ可能 |
 | チャットエリア | メッセージの表示領域 | スクロール可能。最新メッセージが下に表示 |
 | SQL表示ブロック | 生成されたSQLをコードブロックで表示 | シンタックスハイライト付き |

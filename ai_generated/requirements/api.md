@@ -382,15 +382,27 @@ components:
           description: 接続名
         dbType:
           type: string
-          enum: [mysql, postgresql]
+          enum: [mysql, postgresql, graphql]
         host:
           type: string
+          nullable: true
+          description: ホスト名（GraphQL時はnull）
         port:
           type: integer
+          nullable: true
+          description: ポート番号（GraphQL時はnull）
         username:
           type: string
+          nullable: true
+          description: ユーザー名（GraphQL時はnull）
         databaseName:
           type: string
+          nullable: true
+          description: データベース名（GraphQL時はnull）
+        endpointUrl:
+          type: string
+          nullable: true
+          description: GraphQLエンドポイントURL（DB接続時はnull）
         isLastUsed:
           type: boolean
         createdAt:
@@ -405,11 +417,6 @@ components:
       required:
         - name
         - dbType
-        - host
-        - port
-        - username
-        - password
-        - databaseName
       properties:
         name:
           type: string
@@ -417,21 +424,30 @@ components:
           example: "本番DB"
         dbType:
           type: string
-          enum: [mysql, postgresql]
+          enum: [mysql, postgresql, graphql]
           example: "mysql"
         host:
           type: string
+          description: ホスト名（DB接続時必須、GraphQL時は不要）
           example: "db-server"
         port:
           type: integer
+          description: ポート番号（DB接続時必須、GraphQL時は不要）
           example: 3306
         username:
           type: string
+          description: ユーザー名（DB接続時必須、GraphQL時は不要）
           example: "readonly_user"
         password:
           type: string
+          description: パスワード（DB接続時必須、GraphQL時は不要）
           example: "password123"
         databaseName:
           type: string
+          description: データベース名（DB接続時必須、GraphQL時は不要）
           example: "sampledb"
+        endpointUrl:
+          type: string
+          description: GraphQLエンドポイントURL（GraphQL時必須、DB接続時は不要）
+          example: "https://internal-api.example.com/graphql"
 ```
