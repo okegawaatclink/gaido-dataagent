@@ -25,20 +25,22 @@ export default defineConfig(({ mode }) => {
     ? env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS.split(',')
     : []
 
-  // ビルド時にgitコミットハッシュを取得してバージョン情報として埋め込む
-  const gitHash = (() => {
+  // ビルド時のバージョン情報
+  // 環境変数 APP_VERSION が設定されていればそれを使用（Dockerビルド時にARGで渡される）
+  // なければgitから取得を試みる
+  const appVersion = env.APP_VERSION || (() => {
     try {
-      return execSync('git rev-parse --short HEAD').toString().trim()
+      const hash = execSync('git rev-parse --short HEAD').toString().trim()
+      return `${new Date().toISOString().slice(0, 10)} (${hash})`
     } catch {
       return 'unknown'
     }
   })()
-  const buildDate = new Date().toISOString().slice(0, 10)
 
   return {
     // ビルド時定数: フロントエンドコードから参照可能
     define: {
-      __APP_VERSION__: JSON.stringify(`${buildDate} (${gitHash})`),
+      __APP_VERSION__: JSON.stringify(appVersion),
     },
 
     plugins: [

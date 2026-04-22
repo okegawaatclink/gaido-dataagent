@@ -115,8 +115,11 @@ aws ecr get-login-password --region "$REGION" \
 
 # Build image (context = project root, same as docker-compose)
 # --platform linux/amd64: Fargate runs on Linux/amd64, required when building on Apple Silicon Mac
+# APP_VERSION: gitハッシュ+日付をフロントエンドに埋め込む
+APP_VERSION="$(date +%Y-%m-%d) ($(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'unknown'))"
 docker build \
   --platform linux/amd64 \
+  --build-arg APP_VERSION="$APP_VERSION" \
   -f "$PROJECT_ROOT/output_system/Dockerfile" \
   -t "${ECR_URI}:${IMAGE_TAG}" \
   "$PROJECT_ROOT"

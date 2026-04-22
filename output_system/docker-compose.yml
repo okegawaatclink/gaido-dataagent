@@ -15,6 +15,9 @@ services:
       # （output_system/ からの相対パスでは ../ssl-certificates/ が使えないため）
       context: ..
       dockerfile: output_system/Dockerfile
+      args:
+        # フロントエンドに埋め込むバージョン文字列（gitハッシュ+日付）
+        APP_VERSION: "${APP_VERSION:-unknown}"
 
     # instance-config.md の「コンテナ名（フロントエンド）」に合わせる
     # AI Agent containerからこの名前でアクセス可能になる

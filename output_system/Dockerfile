@@ -84,11 +84,13 @@ RUN npm rebuild better-sqlite3
 # =============================================================================
 # フロントエンドのビルド（本番用静的ファイル生成）
 # ビルド後の静的ファイルはfrontend/distに出力される
+# APP_VERSION: ビルド時にdocker buildの--build-argで渡されるバージョン文字列
 # =============================================================================
+ARG APP_VERSION=unknown
 RUN if [ -f /etc/ssl/certs/custom/netskope.cer ]; then \
       export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/custom/netskope.cer; \
     fi && \
-    npm run build:frontend
+    APP_VERSION="${APP_VERSION}" npm run build:frontend
 
 # =============================================================================
 # バックエンドのビルド（TypeScript → JavaScript変換）
