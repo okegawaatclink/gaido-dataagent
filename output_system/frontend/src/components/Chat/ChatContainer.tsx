@@ -39,6 +39,8 @@ interface ChatContainerProps {
   isDbConnectionSelected?: boolean
   /** 選択中のDB種別（省略時は 'mysql' として扱う。GraphQL時は 'graphql' を渡す） */
   selectedDbType?: DbType
+  /** オンデマンド分析コールバック（messageId, question, dbType） */
+  onAnalyze?: (messageId: string, question: string, dbType: string) => void
 }
 
 /**
@@ -55,6 +57,7 @@ const ChatContainer: FC<ChatContainerProps> = ({
   onSend,
   isDbConnectionSelected = true,
   selectedDbType,
+  onAnalyze,
 }) => {
   // チャットエリアの最下部へのスクロール用 ref
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -114,9 +117,22 @@ const ChatContainer: FC<ChatContainerProps> = ({
 
         {/* メッセージリスト */}
         {/* dbType を渡して GraphQL接続時のラベル切替を有効化（PBI #201） */}
-        {messages.map((message) => (
-          <ChatMessage key={message.id} message={message} dbType={selectedDbType} />
-        ))}
+        {messages.map((message, index) => {
+          // アシスタントメッセージの直前のユーザーメッセージを取得
+          const userQuestion =
+            message.role === 'assistant' && index > 0 && messages[index - 1].role === 'user'
+              ? messages[index - 1].content
+              : undefined
+          return (
+            <ChatMessage
+              key={message.id}
+              message={message}
+              dbType={selectedDbType}
+              onAnalyze={onAnalyze}
+              userQuestion={userQuestion}
+            />
+          )
+        })}
 
         {/* ローディング表示（ストリーミング開始前の待ち状態） */}
         {isLoading && messages.length % 2 === 1 && (

@@ -198,3 +198,17 @@ export async function testConnection(
 
   return data
 }
+
+// ---------------------------------------------------------------------------
+// オンデマンド分析 API（POST /api/chat/analyze）
+// ---------------------------------------------------------------------------
+
+/** オンデマンド分析のリクエストパラメータ */
+export interface AnalyzeRequest {
+  messageId: string
+  question: string
+  dbType: string
+}
+
+/** オンデマンド分析 SSE エンドポイントの URL */
+export const ANALYZE_API_URL = buildApiUrl('/api/chat/analyze')

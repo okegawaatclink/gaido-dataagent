@@ -66,6 +66,8 @@ export interface ChatMessage {
   analysis: string | null
   isStreaming: boolean
   createdAt: Date
+  /** バックエンドDB上のメッセージID（オンデマンド分析で使用。フロントエンドIDとは異なる） */
+  dbMessageId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -268,4 +270,6 @@ export interface UseChatReturn {
   send: (message: string, dbConnectionId: string) => Promise<void>
   clearMessages: () => void
   restoreConversation: (id: string, loadedMessages: ChatMessage[]) => void
+  /** オンデマンドでメッセージの分析を実行する */
+  analyzeMessage: (messageId: string, question: string, dbType: string) => Promise<void>
 }

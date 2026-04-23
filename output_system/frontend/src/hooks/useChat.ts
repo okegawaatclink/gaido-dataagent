@@ -41,6 +41,7 @@ import type {
 } from '../types'
 import { streamSseEvents } from './useStreaming'
 import { buildApiUrl } from '../services/api'
+import { ANALYZE_API_URL } from '../services/api'
 
 // ---------------------------------------------------------------------------
 // 定数
@@ -318,6 +319,18 @@ export function useChat(): UseChatReturn {
               break
             }
 
+            case 'message_id': {
+              // バックエンドが保存したメッセージIDを受け取る（オンデマンド分析で使用）
+              const data = sseEvent.data as { messageId: string }
+              if (data.messageId) {
+                updateAssistantMessage(assistantMessageId, (prev) => ({
+                  ...prev,
+                  dbMessageId: data.messageId,
+                }))
+              }
+              break
+            }
+
             case 'done': {
               // ストリーム終了: isStreaming を false にして完了
               updateAssistantMessage(assistantMessageId, (prev) => ({
@@ -397,6 +410,80 @@ export function useChat(): UseChatReturn {
     [],
   )
 
+  /**
+   * 指定メッセージのオンデマンド分析を実行する
+   *
+   * POST /api/chat/analyze にリクエストを送り、SSEで分析チャンクを受信して
+   * 対象メッセージの analysis フィールドを逐次更新する。
+   *
+   * @param messageId - 分析対象のアシスタントメッセージID
+   * @param question  - 元のユーザーの質問テキスト
+   * @param dbType    - DB種別（'mysql' / 'postgresql' / 'graphql'）
+   */
+  const analyzeMessage = useCallback(
+    async (messageId: string, question: string, dbType: string) => {
+      // バックエンドDBのメッセージIDを取得（フロントエンドIDとは異なる）
+      const targetMessage = messages.find((m) => m.id === messageId)
+      const backendMessageId = targetMessage?.dbMessageId
+      if (!backendMessageId) {
+        console.error('[useChat] dbMessageId not found for message:', messageId)
+        return
+      }
+
+      // 分析中フラグを立てる（isStreaming を再利用）
+      updateAssistantMessage(messageId, (prev) => ({
+        ...prev,
+        analysis: '',
+        isStreaming: true,
+      }))
+
+      try {
+        const generator = streamSseEvents(
+          ANALYZE_API_URL,
+          { messageId: backendMessageId, question, dbType },
+        )
+
+        for await (const sseEvent of generator) {
+          if (sseEvent.event === 'analysis') {
+            const data = sseEvent.data as SseMessageData
+            if (data.chunk) {
+              updateAssistantMessage(messageId, (prev) => ({
+                ...prev,
+                analysis: (prev.analysis ?? '') + data.chunk,
+              }))
+            }
+          } else if (sseEvent.event === 'error') {
+            const data = sseEvent.data as SseErrorData
+            updateAssistantMessage(messageId, (prev) => ({
+              ...prev,
+              analysis: null,
+              error: data.message ?? '分析中にエラーが発生しました',
+              isStreaming: false,
+            }))
+            return
+          } else if (sseEvent.event === 'done') {
+            break
+          }
+        }
+      } catch (err) {
+        console.error('[useChat] analyze error:', err)
+        updateAssistantMessage(messageId, (prev) => ({
+          ...prev,
+          analysis: null,
+          isStreaming: false,
+        }))
+        return
+      }
+
+      // 分析完了
+      updateAssistantMessage(messageId, (prev) => ({
+        ...prev,
+        isStreaming: false,
+      }))
+    },
+    [messages, updateAssistantMessage],
+  )
+
   return {
     messages,
     isLoading,
@@ -404,5 +491,6 @@ export function useChat(): UseChatReturn {
     send,
     clearMessages,
     restoreConversation,
+    analyzeMessage,
   }
 }

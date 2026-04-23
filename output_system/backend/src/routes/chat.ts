@@ -57,6 +57,8 @@ import {
   updateConversationTimestamp,
   createMessage,
   listMessagesByConversationId,
+  getMessageById,
+  updateMessageAnalysis,
 } from '../services/historyDb'
 
 const router = Router()
@@ -429,38 +431,20 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
           chartType: extractedChartType,
         })
 
-        // -----------------------------------------------------------------------
-        // Step 5-GraphQL: GraphQL結果の分析コメント生成（ストリーミング）
-        // -----------------------------------------------------------------------
-        let analysisText = ''
-        try {
-          const analysisGenerator = llmService.analyzeResults({
-            question: message.trim(),
-            sql: extractedSql,
-            columns: queryResult.columns,
-            rows: queryResult.rows,
-            dbType: 'graphql',
-          })
-
-          for await (const chunk of analysisGenerator) {
-            analysisText += chunk
-            sendSseEvent(res, 'analysis', { chunk })
-          }
-        } catch (err) {
-          // 分析コメント生成失敗はログに記録するが、メインフローは止めない
-          console.error('[chat] analyzeResults (GraphQL) error:', err)
-        }
-
-        // assistant メッセージをDB に保存（sql=GraphQLクエリ, chart_type, query_result, analysis 含む）
-        _saveAssistantMessage(
+        // assistant メッセージをDB に保存（sql=GraphQLクエリ, chart_type, query_result 含む）
+        // 分析はユーザーのオンデマンド操作で POST /api/chat/analyze から実行する
+        const savedMessageId = _saveAssistantMessage(
           activeConversationId,
           fullAssistantText,
           extractedSql,
           extractedChartType,
           queryResult,
-          null,
-          analysisText || null
+          null
         )
+        // 保存されたメッセージIDをフロントエンドに通知（オンデマンド分析で使用）
+        if (savedMessageId) {
+          sendSseEvent(res, 'message_id', { messageId: savedMessageId })
+        }
       } catch (err) {
         // GraphQL バリデーション失敗または実行エラー
         // 内部エラー詳細はサーバーログに記録
@@ -518,38 +502,20 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
           chartType: extractedChartType,
         })
 
-        // -----------------------------------------------------------------------
-        // Step 5-SQL: クエリ結果の分析コメント生成（ストリーミング）
-        // -----------------------------------------------------------------------
-        let analysisText = ''
-        try {
-          const analysisGenerator = llmService.analyzeResults({
-            question: message.trim(),
-            sql: extractedSql,
-            columns: queryResult.columns,
-            rows: queryResult.rows,
-            dbType: schema.dbType,
-          })
-
-          for await (const chunk of analysisGenerator) {
-            analysisText += chunk
-            sendSseEvent(res, 'analysis', { chunk })
-          }
-        } catch (err) {
-          // 分析コメント生成失敗はログに記録するが、メインフローは止めない
-          console.error('[chat] analyzeResults error:', err)
-        }
-
-        // assistant メッセージをDB に保存（sql, chart_type, query_result, analysis 含む）
-        _saveAssistantMessage(
+        // assistant メッセージをDB に保存（sql, chart_type, query_result 含む）
+        // 分析はユーザーのオンデマンド操作で POST /api/chat/analyze から実行する
+        const savedMessageId = _saveAssistantMessage(
           activeConversationId,
           fullAssistantText,
           extractedSql,
           extractedChartType,
           queryResult,
-          null,
-          analysisText || null
+          null
         )
+        // 保存されたメッセージIDをフロントエンドに通知（オンデマンド分析で使用）
+        if (savedMessageId) {
+          sendSseEvent(res, 'message_id', { messageId: savedMessageId })
+        }
       } catch (err) {
         // SQL バリデーション失敗または実行エラー
         // 内部エラー詳細（DBホスト名等）はサーバーログに記録
@@ -571,6 +537,108 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
   } finally {
     // done イベントは必ずここで一度だけ送信する（二重送信防止）
     finishStream()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// POST /api/chat/analyze - オンデマンド分析（SSEストリーミング）
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/chat/analyze
+ *
+ * 指定メッセージのクエリ結果をLLMで分析し、SSEで結果をストリーミングする。
+ * ユーザーが「分析する」ボタンをクリックした場合にのみ呼ばれる。
+ *
+ * リクエストボディ:
+ *   messageId: string - 分析対象のアシスタントメッセージID
+ *   question: string  - 元のユーザーの質問テキスト
+ *   dbType: string    - DB種別（'mysql' / 'postgresql' / 'graphql'）
+ *
+ * SSEイベント:
+ *   event: analysis - 分析コメントチャンク（逐次送信）
+ *   event: done     - ストリーム終了
+ *   event: error    - エラーメッセージ
+ */
+router.post('/analyze', chatRateLimiter, async (req: Request, res: Response) => {
+  const { messageId, question, dbType } = req.body as {
+    messageId?: string
+    question?: string
+    dbType?: string
+  }
+
+  // バリデーション
+  if (!messageId || typeof messageId !== 'string') {
+    res.status(400).json({ error: 'messageId は必須です。' })
+    return
+  }
+  if (!question || typeof question !== 'string') {
+    res.status(400).json({ error: 'question は必須です。' })
+    return
+  }
+
+  // メッセージをDBから取得
+  const historyDb = getHistoryDb()
+  const messageRow = getMessageById(historyDb, messageId)
+  if (!messageRow) {
+    res.status(404).json({ error: '指定されたメッセージが見つかりません。' })
+    return
+  }
+
+  // query_result を取得
+  if (!messageRow.query_result) {
+    res.status(400).json({ error: 'このメッセージにはクエリ結果がありません。' })
+    return
+  }
+
+  let queryResult: { columns: string[]; rows: Record<string, unknown>[] }
+  try {
+    queryResult = JSON.parse(messageRow.query_result)
+  } catch {
+    res.status(500).json({ error: 'クエリ結果の解析に失敗しました。' })
+    return
+  }
+
+  const sql = messageRow.sql ?? ''
+
+  // SSE ヘッダー設定
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+
+  const sendSseEventLocal = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  }
+
+  try {
+    const llmService = new LlmService()
+    const analysisGenerator = llmService.analyzeResults({
+      question,
+      sql,
+      columns: queryResult.columns,
+      rows: queryResult.rows,
+      dbType: (dbType as 'mysql' | 'postgresql' | 'graphql') ?? 'mysql',
+    })
+
+    let analysisText = ''
+    for await (const chunk of analysisGenerator) {
+      analysisText += chunk
+      sendSseEventLocal('analysis', { chunk })
+    }
+
+    // 分析結果をDBに保存
+    if (analysisText) {
+      updateMessageAnalysis(historyDb, messageId, analysisText)
+    }
+  } catch (err) {
+    console.error('[chat/analyze] error:', err)
+    sendSseEventLocal('error', { message: '分析コメントの生成中にエラーが発生しました。' })
+  } finally {
+    sendSseEventLocal('done', {})
+    res.end()
   }
 })
 
@@ -599,13 +667,14 @@ function _saveAssistantMessage(
   queryResult: unknown,
   error: string | null,
   analysis?: string | null
-): void {
-  if (!conversationId) return
+): string | null {
+  if (!conversationId) return null
 
   try {
     const historyDb = getHistoryDb()
+    const messageId = uuidv4()
     createMessage(historyDb, {
-      id: uuidv4(),
+      id: messageId,
       conversationId,
       role: 'assistant',
       content: content || '',
@@ -615,9 +684,11 @@ function _saveAssistantMessage(
       error,
       analysis,
     })
+    return messageId
   } catch (err) {
     // 履歴DB 書き込みエラーはログに記録するが、ストリームには影響しない
     console.error('[chat] history DB write error (assistant message):', err)
+    return null
   }
 }
 

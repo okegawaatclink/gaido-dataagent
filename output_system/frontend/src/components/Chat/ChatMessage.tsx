@@ -19,12 +19,15 @@
  * - dangerouslySetInnerHTML は使用しない
  */
 
-import type { FC } from 'react'
+import { useState, useCallback, type FC } from 'react'
 import type { ChatMessage as ChatMessageType, DbType } from '../../types'
 import StreamingText from './StreamingText'
 import SQLDisplay from '../SQL/SQLDisplay'
 import ChartRenderer from '../Chart/ChartRenderer'
 import ErrorMessage from '../common/ErrorMessage'
+
+/** 大きな結果セットとみなす行数の閾値 */
+const LARGE_RESULT_THRESHOLD = 100
 
 /**
  * ChatMessage コンポーネントの Props
@@ -32,11 +35,17 @@ import ErrorMessage from '../common/ErrorMessage'
  * @property message - 表示するチャットメッセージオブジェクト
  * @property dbType  - 選択中のDB接続先タイプ（省略時はSQLとして扱う）
  *                     'graphql' の場合、SQLDisplayのラベルを「生成されたGraphQLクエリ」に変更する
+ * @property onAnalyze - 分析ボタンクリック時のコールバック（省略時はボタン非表示）
+ * @property userQuestion - 元のユーザーの質問テキスト（分析リクエストに必要）
  */
 interface ChatMessageProps {
   message: ChatMessageType
   /** DB種別（'mysql' / 'postgresql' / 'graphql'）。省略時はSQLとして扱う */
   dbType?: DbType
+  /** 分析ボタンクリック時のコールバック */
+  onAnalyze?: (messageId: string, question: string, dbType: string) => void
+  /** 元のユーザーの質問テキスト */
+  userQuestion?: string
 }
 
 /**
@@ -47,12 +56,34 @@ interface ChatMessageProps {
  *
  * @param props - ChatMessageProps
  */
-const ChatMessage: FC<ChatMessageProps> = ({ message, dbType }) => {
+const ChatMessage: FC<ChatMessageProps> = ({ message, dbType, onAnalyze, userQuestion }) => {
   const isUser = message.role === 'user'
+  const [showLargeWarning, setShowLargeWarning] = useState(false)
 
   // SQLDisplay に渡すラベル
   // GraphQL接続の場合は「生成されたGraphQLクエリ」、DB接続の場合は「生成されたSQL」
   const queryLabel = dbType === 'graphql' ? '生成されたGraphQLクエリ' : '生成されたSQL'
+
+  // 分析ボタンのクリックハンドラ
+  const handleAnalyzeClick = useCallback(() => {
+    if (!onAnalyze || !userQuestion) return
+    const rowCount = message.result?.rows?.length ?? 0
+
+    if (rowCount >= LARGE_RESULT_THRESHOLD) {
+      setShowLargeWarning(true)
+      return
+    }
+
+    onAnalyze(message.id, userQuestion, dbType ?? 'mysql')
+  }, [onAnalyze, userQuestion, message.id, message.result, dbType])
+
+  // 警告を確認して分析を実行
+  const handleConfirmAnalyze = useCallback(() => {
+    setShowLargeWarning(false)
+    if (onAnalyze && userQuestion) {
+      onAnalyze(message.id, userQuestion, dbType ?? 'mysql')
+    }
+  }, [onAnalyze, userQuestion, message.id, dbType])
 
   return (
     <div
@@ -117,6 +148,44 @@ const ChatMessage: FC<ChatMessageProps> = ({ message, dbType }) => {
                 isStreaming={message.isStreaming}
               />
             </div>
+          </div>
+        )}
+
+        {/* AIに分析させるボタン（結果あり・分析未実施・ストリーミング中でない場合） */}
+        {!isUser && message.result && !message.analysis && !message.isStreaming && onAnalyze && (
+          <div className="chat-message__analyze">
+            {showLargeWarning ? (
+              <div className="chat-message__analyze-warning" role="alert">
+                <p>
+                  ⚠️ 結果が {message.result.rows.length} 行あります。
+                  分析にはトークンを多く消費する可能性があります。
+                </p>
+                <div className="chat-message__analyze-warning-actions">
+                  <button
+                    type="button"
+                    className="chat-message__analyze-warning-btn chat-message__analyze-warning-btn--confirm"
+                    onClick={handleConfirmAnalyze}
+                  >
+                    分析する
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-message__analyze-warning-btn chat-message__analyze-warning-btn--cancel"
+                    onClick={() => setShowLargeWarning(false)}
+                  >
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="chat-message__analyze-btn"
+                onClick={handleAnalyzeClick}
+              >
+                💡 AIに分析させる
+              </button>
+            )}
           </div>
         )}
 

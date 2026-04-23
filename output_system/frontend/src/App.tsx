@@ -82,6 +82,7 @@ const App: FC = () => {
     send,
     clearMessages,
     restoreConversation,
+    analyzeMessage,
   } = useChat()
 
   // DB接続先一覧（PBI #149 追加: 選択中DB接続先の管理）
@@ -396,6 +397,7 @@ const App: FC = () => {
                 onSend={handleSend}
                 isDbConnectionSelected={!!selectedDbConnectionId}
                 selectedDbType={selectedDbType}
+                onAnalyze={analyzeMessage}
               />
             </main>
           </>

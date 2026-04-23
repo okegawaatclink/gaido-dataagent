@@ -121,6 +121,7 @@ function toFrontendMessage(msg: HistoryMessageResponse): ChatMessage {
     analysis: msg.analysis ?? null,
     isStreaming: false,  // 履歴はストリーミング中ではない
     createdAt: new Date(msg.createdAt),
+    dbMessageId: msg.id,  // 履歴復元時はIDがそのままDB上のID
   }
 }
 

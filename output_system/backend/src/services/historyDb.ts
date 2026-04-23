@@ -593,6 +593,26 @@ export function createMessage(
 }
 
 /**
+ * 指定メッセージの analysis フィールドを更新する
+ *
+ * オンデマンド分析で生成された分析コメントを既存メッセージに書き込む。
+ *
+ * @param db       - Database インスタンス
+ * @param id       - 更新するメッセージID
+ * @param analysis - AI分析コメント
+ */
+export function updateMessageAnalysis(
+  db: Database.Database,
+  id: string,
+  analysis: string
+): void {
+  const stmt = db.prepare(`
+    UPDATE messages SET analysis = @analysis WHERE id = @id
+  `)
+  stmt.run({ id, analysis })
+}
+
+/**
  * 指定IDのメッセージを取得する
  *
  * @param db - Database インスタンス（省略時はシングルトン）
