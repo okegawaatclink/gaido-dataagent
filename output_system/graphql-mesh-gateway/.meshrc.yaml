@@ -1,0 +1,18 @@
+sources:
+  - name: OpenMeteo
+    handler:
+      openapi:
+        source: https://raw.githubusercontent.com/open-meteo/open-meteo/main/openapi.yml
+        endpoint: https://api.open-meteo.com
+        ignoreErrorResponses: true
+
+  - name: PetStore
+    handler:
+      openapi:
+        source: https://petstore3.swagger.io/api/v3/openapi.json
+        endpoint: https://petstore3.swagger.io/api/v3
+        ignoreErrorResponses: true
+
+serve:
+  hostname: 0.0.0.0
+  port: 4000

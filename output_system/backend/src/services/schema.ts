@@ -186,8 +186,21 @@ function buildDynamicKnex(dbConnectionId: string): {
 /**
  * GraphQL IntrospectionのTypeエントリ型（内部型）
  */
+interface GraphQLIntrospectionArg {
+  name: string
+  type: {
+    name: string | null
+    kind: string
+    ofType: {
+      name: string | null
+      kind: string
+    } | null
+  }
+}
+
 interface GraphQLIntrospectionField {
   name: string
+  args?: GraphQLIntrospectionArg[]
   type: {
     name: string | null
     kind: string
@@ -205,6 +218,7 @@ interface GraphQLIntrospectionType {
   name: string
   kind: string
   fields: GraphQLIntrospectionField[] | null
+  enumValues?: Array<{ name: string }> | null
 }
 
 /**
@@ -260,15 +274,29 @@ function resolveTypeName(type: { name: string | null; kind: string; ofType: { na
  * @throws Error - 接続失敗またはIntrospection無効の場合
  */
 async function fetchSchemaGraphQL(endpointUrl: string): Promise<SchemaInfo> {
-  // フルIntrospection Query（フィールド・引数・型情報を含む）
+  // フルIntrospection Query（フィールド・引数・型情報・ENUM値を含む）
   const introspectionQuery = `
     {
       __schema {
         types {
           name
           kind
+          enumValues {
+            name
+          }
           fields {
             name
+            args {
+              name
+              type {
+                name
+                kind
+                ofType {
+                  name
+                  kind
+                }
+              }
+            }
             type {
               name
               kind
@@ -307,6 +335,14 @@ async function fetchSchemaGraphQL(endpointUrl: string): Promise<SchemaInfo> {
 
   const types = data.data?.__schema?.types ?? []
 
+  // ENUM型の値マップを構築（引数コメント生成用）
+  const enumValueMap = new Map<string, string[]>()
+  for (const type of types) {
+    if (type.kind === 'ENUM' && !type.name.startsWith('__') && type.enumValues) {
+      enumValueMap.set(type.name, type.enumValues.map((v) => v.name))
+    }
+  }
+
   // OBJECT/INTERFACE/INPUT_OBJECT 型のみを対象（SCALAR, ENUM, UNION, ビルトイン型は除外）
   // ビルトイン型の除外基準: 名前が '__' で始まるもの
   const filteredTypes = types.filter(
@@ -314,6 +350,29 @@ async function fetchSchemaGraphQL(endpointUrl: string): Promise<SchemaInfo> {
       (type.kind === 'OBJECT' || type.kind === 'INTERFACE' || type.kind === 'INPUT_OBJECT') &&
       !type.name.startsWith('__')
   )
+
+  /**
+   * 引数情報を人間可読な文字列に変換する
+   * 例: "args: latitude: Float!, longitude: Float!, hourly: [temperature_2m|wind_speed_10m|...]"
+   */
+  function formatArgs(args: GraphQLIntrospectionArg[]): string {
+    if (!args || args.length === 0) return ''
+    const parts = args.map((arg) => {
+      const typeName = resolveTypeName(arg.type)
+      const required = arg.type.kind === 'NON_NULL' ? '!' : ''
+      // ENUM型の場合、使用可能な値をリストで付記（最大10個）
+      const enumName = arg.type.kind === 'NON_NULL' ? arg.type.ofType?.name : arg.type.name
+      const enumVals = enumName ? enumValueMap.get(enumName) : undefined
+      if (enumVals) {
+        const valStr = enumVals.length > 10
+          ? enumVals.slice(0, 10).join('|') + '|...'
+          : enumVals.join('|')
+        return `${arg.name}: ${typeName}${required} (values: ${valStr})`
+      }
+      return `${arg.name}: ${typeName}${required}`
+    })
+    return `args: ${parts.join(', ')}`
+  }
 
   // SchemaInfo.tables 形式に変換（GraphQLのTypeをtableとして扱う）
   const tables: TableInfo[] = filteredTypes
@@ -325,7 +384,8 @@ async function fetchSchemaGraphQL(endpointUrl: string): Promise<SchemaInfo> {
         type: resolveTypeName(field.type),
         // NON_NULL でラップされていればnon-nullable（必須）
         nullable: field.type.kind !== 'NON_NULL',
-        comment: null,
+        // 引数情報をコメントに含める（LLMが必須パラメータを把握できるように）
+        comment: field.args && field.args.length > 0 ? formatArgs(field.args) : null,
       }))
 
       return {
