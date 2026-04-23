@@ -171,6 +171,13 @@ QUERY GENERATION RULES:
    - "pie"  : Proportional data (distribution, share percentages)
    - "table": Complex data, many fields, or when no specific chart is appropriate
 6. **CRITICAL: NEVER reference types or fields that are not listed in the Database Schema.**
+7. **ENUM VALUES: When the schema comment shows "args: ... (values: val1|val2|...)", those are GraphQL enum values. Use them WITHOUT quotes as bare identifiers.**
+   - CORRECT: \`findPetsByStatus(status: available)\`
+   - WRONG: \`findPetsByStatus(status: "available")\`
+   - Enum values are listed after "(values:" in the field comments.
+8. **REQUIRED ARGUMENTS: When the schema comment shows "args: fieldName: Type!", the "!" means the argument is required. You MUST include all required arguments in your query.**
+   - Example: if a field has \`args: latitude: Float!, longitude: Float!\`, you must provide both values.
+   - For location-based queries, use reasonable defaults (e.g., Tokyo: latitude 35.6762, longitude 139.6503) if the user doesn't specify.
 
 IMPORTANT: Always try your best to help the user. If the question is vague, make reasonable assumptions based on the available schema and explain your interpretation.
 
@@ -264,7 +271,8 @@ export function schemaToPromptText(schema: SchemaInfo): string {
       for (const col of table.columns) {
         // col.nullable = false の場合は NON_NULL（required）
         const nullability = col.nullable ? 'nullable' : 'required'
-        lines.push(`  - ${col.name}: ${col.type} (${nullability})`)
+        const comment = col.comment ? ` -- ${col.comment}` : ''
+        lines.push(`  - ${col.name}: ${col.type} (${nullability})${comment}`)
       }
       lines.push('')
     }
