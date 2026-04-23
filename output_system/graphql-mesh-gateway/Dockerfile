@@ -18,6 +18,7 @@ RUN if [ -f /etc/ssl/certs/custom/netskope.cer ]; then \
     npm install
 
 COPY output_system/graphql-mesh-gateway/.meshrc.yaml ./
+COPY output_system/graphql-mesh-gateway/jsonplaceholder-openapi.yaml ./
 
 EXPOSE 4000
 
