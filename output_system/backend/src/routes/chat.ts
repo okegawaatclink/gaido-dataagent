@@ -187,7 +187,7 @@ router.post('/', chatRateLimiter, async (req: Request, res: Response): Promise<v
   }
 
   // conversationId の長さチェック（極端に長い文字列は先に弾く）
-  if (reqConversationId !== undefined && reqConversationId.length > 128) {
+  if (reqConversationId != null && reqConversationId.length > 128) {
     res.status(400).json({ error: 'conversationId は 128 文字以内で指定してください。' })
     return
   }
