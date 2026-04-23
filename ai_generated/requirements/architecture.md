@@ -91,8 +91,10 @@ flowchart LR
     E2 --> F2["GraphQL実行<br>選択中のエンドポイント"]
     F --> G["結果整形<br>+ グラフデータ生成"]
     F2 --> G
-    G --> G2["Claude API<br>AI分析コメント生成"]
-    G2 --> H["フロントエンド<br>Recharts で描画<br>+ 分析コメント表示"]
+    G --> H["フロントエンド<br>Recharts で描画"]
+    H --> H2{"ユーザーが<br>分析ボタンクリック?"}
+    H2 -->|"Yes"| I["POST /api/chat/analyze<br>Claude API<br>AI分析コメント生成"]
+    I --> J["フロントエンド<br>分析コメント<br>ストリーミング表示"]
 ```
 
 ## 技術スタック詳細
@@ -104,7 +106,7 @@ flowchart LR
 | バックエンド | Node.js 20+, Express, TypeScript | REST API + SSE |
 | DB接続 | knex.js | PostgreSQL/MySQL 抽象化。動的接続先切替対応 |
 | GraphQL接続 | Node.js fetch（標準API） | Introspection + クエリ実行。追加ライブラリ不要 |
-| LLM連携 | @anthropic-ai/sdk, @anthropic-ai/bedrock-sdk | Claude API公式SDK + Bedrock SDK。SQL生成+分析コメントの2回呼び出し。USE_BEDROCK環境変数で切替 |
+| LLM連携 | @anthropic-ai/sdk, @anthropic-ai/bedrock-sdk | Claude API公式SDK + Bedrock SDK。SQL生成（/api/chat）と分析コメント（/api/chat/analyze、オンデマンド）の2エンドポイント。USE_BEDROCK環境変数で切替 |
 | クエリ履歴 | SQLite (better-sqlite3, WAL mode) | 会話・メッセージ・DB接続先の永続化 |
 | パスワード暗号化 | Node.js crypto (AES-256-GCM) | 追加依存なし。暗号化キーは環境変数で管理 |
 | ユーザーDB | MySQL / PostgreSQL（画面から動的登録） | 画面からCRUD可能。接続テスト機能付き |

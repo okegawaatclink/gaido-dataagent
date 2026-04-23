@@ -14,6 +14,7 @@
 | PUT | /api/connections/:id | DB接続先を更新 | **新規** |
 | DELETE | /api/connections/:id | DB接続先を削除（関連会話も削除） | **新規** |
 | POST | /api/connections/test | DB接続テスト | **新規** |
+| POST | /api/chat/analyze | クエリ結果のオンデマンドAI分析（SSE） | **新規** |
 | GET | /api/health | ヘルスチェック | 変更なし |
 | GET | /api/config | アプリケーション設定情報（LLMバックエンド・モデル名） | **新規** |
 
@@ -200,9 +201,12 @@ paths:
                   - event: sql (生成されたSQL)
                   - event: chart_type (推奨グラフ種類)
                   - event: result (クエリ結果JSON)
-                  - event: analysis (AI分析コメントのチャンク)
+                  - event: message_id (DB保存済みメッセージID。オンデマンド分析で使用)
                   - event: error (エラー発生時)
                   - event: done (ストリーム終了)
+
+                  ※ AI分析コメントは自動生成されない。ユーザーが明示的に
+                  POST /api/chat/analyze を呼び出すことでオンデマンドで生成する。
 
                   会話コンテキスト: conversationId指定時、同一会話の過去メッセージ（直近10往復）を
                   LLMのmessages配列に含めて送信する。これにより直前のSQLに対する修正依頼に対応可能。
@@ -210,6 +214,50 @@ paths:
           description: リクエスト不正
         "500":
           description: サーバーエラー
+
+  /api/chat/analyze:
+    post:
+      summary: クエリ結果のオンデマンドAI分析
+      description: |
+        指定メッセージのクエリ結果をLLMで分析し、SSEで結果をストリーミングする。
+        ユーザーが「AIに分析させる」ボタンをクリックした場合にのみ呼ばれる。
+        100行以上の結果に対してはフロントエンドで警告を表示し、ユーザー確認後に実行する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - messageId
+                - question
+              properties:
+                messageId:
+                  type: string
+                  description: 分析対象のアシスタントメッセージID（DB上のID）
+                question:
+                  type: string
+                  description: 元のユーザーの質問テキスト
+                dbType:
+                  type: string
+                  enum: [mysql, postgresql, graphql]
+                  description: DB種別（省略時はmysql）
+      responses:
+        "200":
+          description: SSEストリーム
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  以下のイベントが送信される:
+                  - event: analysis (分析コメントのチャンク)
+                  - event: error (エラー発生時)
+                  - event: done (ストリーム終了)
+        "400":
+          description: バリデーションエラー（messageId/question未指定、クエリ結果なし）
+        "404":
+          description: メッセージが見つからない
 
   /api/history:
     get:
