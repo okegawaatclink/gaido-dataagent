@@ -114,6 +114,56 @@ export function flattenObject(
 }
 
 /**
+ * 配列フィールドのzip展開
+ *
+ * 全フィールドが同じ長さの配列である行を検出し、
+ * インデックスごとに個別の行に展開する。
+ *
+ * Open-Meteo等のAPIが返す形式:
+ *   { "daily.time": ["2026-04-23", "2026-04-24"], "daily.temp": [15.4, 19.5] }
+ * 展開後:
+ *   [{ "daily.time": "2026-04-23", "daily.temp": 15.4 }, { "daily.time": "2026-04-24", "daily.temp": 19.5 }]
+ *
+ * 配列でないフィールドが混在する場合や、配列の長さが異なる場合は展開しない。
+ */
+function unzipArrayFields(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const result: Record<string, unknown>[] = []
+
+  for (const row of rows) {
+    const entries = Object.entries(row)
+    // 全フィールドが配列かチェック
+    const arrayEntries = entries.filter(([, v]) => Array.isArray(v))
+
+    if (arrayEntries.length === 0 || arrayEntries.length !== entries.length) {
+      // 配列フィールドがない、または混在している場合はそのまま
+      result.push(row)
+      continue
+    }
+
+    // 全配列の長さが同じかチェック
+    const lengths = arrayEntries.map(([, v]) => (v as unknown[]).length)
+    const allSameLength = lengths.every((l) => l === lengths[0])
+
+    if (!allSameLength || lengths[0] === 0) {
+      result.push(row)
+      continue
+    }
+
+    // zip展開: 各インデックスを1行にする
+    const len = lengths[0]
+    for (let i = 0; i < len; i++) {
+      const newRow: Record<string, unknown> = {}
+      for (const [key, value] of arrayEntries) {
+        newRow[key] = (value as unknown[])[i]
+      }
+      result.push(newRow)
+    }
+  }
+
+  return result
+}
+
+/**
  * GraphQL レスポンスの data 部分を rows/columns 形式に変換する
  *
  * data オブジェクトの最初のキーの値が結果配列と想定する（キー名は動的）。
@@ -170,7 +220,13 @@ export function formatGraphQLResult(data: Record<string, unknown>): QueryResult 
   }
 
   // 各行をフラット化する（ネストしたオブジェクトを展開）
-  const flatRows = rawRows.map((row) => flattenObject(row))
+  let flatRows = rawRows.map((row) => flattenObject(row))
+
+  // 配列フィールドのzip展開:
+  // Open-Meteo等のAPIは { time: ["...", "..."], temperature: [15, 19] } のように
+  // 全フィールドが同じ長さの配列で返す。この場合、配列をインデックスごとに行に展開する。
+  // 例: { time: ["a","b"], temp: [1,2] } → [{ time: "a", temp: 1 }, { time: "b", temp: 2 }]
+  flatRows = unzipArrayFields(flatRows)
 
   // 全行からカラム名を収集（最初の行を基準とし、他の行に存在するカラムも追加）
   const columnSet = new Set<string>()
